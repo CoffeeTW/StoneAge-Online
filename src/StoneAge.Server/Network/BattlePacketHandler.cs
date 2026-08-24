@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Net.Sockets;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using StoneAge.Domain.Entities;
 using StoneAge.Game.Battle;
 using StoneAge.Game.Item;
 using StoneAge.Infrastructure.Persistence;
@@ -16,6 +17,9 @@ public sealed class BattlePacketHandler(
     ItemCatalog items,
     ILogger<BattlePacketHandler> logger) : IClientPacketHandler
 {
+    private const int MaxPetsPerCharacter = 5;
+    private const int InventoryCapacity = 20;
+
     public async Task<bool> TryStartEncounterAsync(GameSession session, NetworkStream stream, int mapId, CancellationToken ct)
     {
         if (session.State != SessionState.InWorld || session.CharacterId is null)
@@ -37,7 +41,9 @@ public sealed class BattlePacketHandler(
             defense += item.DefenseBonus;
         }
 
-        var battle = battles.TryStart(characterId, mapId, character.Hp, attack, defense);
+        var battle = battles.TryStart(
+            characterId, mapId, character.Hp, attack, defense,
+            character.Earth, character.Water, character.Fire, character.Wind);
         if (battle is null)
             return false;
 
@@ -67,27 +73,59 @@ public sealed class BattlePacketHandler(
 
     private async Task ResolveTurnAsync(GameSession session, byte[] payload, NetworkStream stream, CancellationToken ct)
     {
-        if (payload.Length != 1 || payload[0] is < 1 or > 2 || session.CharacterId is null)
+        if (payload.Length != 1 || payload[0] is < 1 or > 4 || session.CharacterId is null)
             return;
 
         var characterId = session.CharacterId.Value;
         if (!battles.TryGet(characterId, out var battle) || battle is null)
             return;
 
-        var action = payload[0]; // 1=Attack, 2=Defend
+        var action = payload[0]; // 1=Attack, 2=Defend, 3=Escape, 4=Capture
+        if (action == 3)
+        {
+            var escaped = TryEscape(battle);
+            if (escaped)
+            {
+                battles.End(characterId);
+                session.LeaveBattle();
+                await SendBattleEndAsync(stream, 2, 0, 0, 0, 0, 0, "Escaped.", ct);
+                return;
+            }
+        }
+
+        if (action == 4)
+        {
+            var captured = await TryCaptureAsync(characterId, battle, ct);
+            if (captured)
+            {
+                battles.End(characterId);
+                session.LeaveBattle();
+                await SendBattleEndAsync(stream, 3, 0, 0, 0, 0, battle.Monster.Id, "Captured.", ct);
+                return;
+            }
+        }
+
         var playerDamage = 0;
         var monsterDamage = 0;
 
         if (action == 1)
         {
-            playerDamage = CalculateDamage(battle.PlayerAttack, battle.Monster.Defense);
+            playerDamage = CalculateDamage(
+                battle.PlayerAttack,
+                battle.Monster.Defense,
+                battle.PlayerEarth, battle.PlayerWater, battle.PlayerFire, battle.PlayerWind,
+                battle.Monster.Earth, battle.Monster.Water, battle.Monster.Fire, battle.Monster.Wind);
             battle.MonsterHp = Math.Max(0, battle.MonsterHp - playerDamage);
         }
 
         var victory = battle.MonsterHp <= 0;
         if (!victory)
         {
-            monsterDamage = CalculateDamage(battle.Monster.Attack, battle.PlayerDefense);
+            monsterDamage = CalculateDamage(
+                battle.Monster.Attack,
+                battle.PlayerDefense,
+                battle.Monster.Earth, battle.Monster.Water, battle.Monster.Fire, battle.Monster.Wind,
+                battle.PlayerEarth, battle.PlayerWater, battle.PlayerFire, battle.PlayerWind);
             if (action == 2)
                 monsterDamage = Math.Max(1, monsterDamage / 2);
             battle.PlayerHp = Math.Max(0, battle.PlayerHp - monsterDamage);
@@ -100,6 +138,7 @@ public sealed class BattlePacketHandler(
 
         var gainedExp = 0;
         var levelsGained = 0;
+        var droppedItemId = 0;
         if (victory)
         {
             gainedExp = battle.Monster.ExpReward;
@@ -110,13 +149,14 @@ public sealed class BattlePacketHandler(
                 character.Level++;
                 character.MaxHp += 10;
                 character.MaxMp += 5;
-                character.Strength += 1;
-                character.Vitality += 1;
-                character.Agility += 1;
-                character.Endurance += 1;
+                character.Strength++;
+                character.Vitality++;
+                character.Agility++;
+                character.Endurance++;
                 levelsGained++;
             }
             character.Hp = Math.Min(character.Hp, character.MaxHp);
+            droppedItemId = await TryGrantDropAsync(db, characterId, battle.Monster, ct);
         }
 
         character.UpdatedAt = DateTimeOffset.UtcNow;
@@ -128,7 +168,16 @@ public sealed class BattlePacketHandler(
         {
             battles.End(characterId);
             session.LeaveBattle();
-            await SendBattleEndAsync(stream, victory, gainedExp, levelsGained, character.Level, character.Experience, ct);
+            await SendBattleEndAsync(
+                stream,
+                victory ? (byte)1 : (byte)0,
+                gainedExp,
+                levelsGained,
+                character.Level,
+                character.Experience,
+                droppedItemId,
+                victory ? "Victory." : "Defeat.",
+                ct);
             logger.LogInformation("Battle ended CharacterId={CharacterId} Victory={Victory} Level={Level}", characterId, victory, character.Level);
         }
         else
@@ -137,8 +186,91 @@ public sealed class BattlePacketHandler(
         }
     }
 
-    private static int CalculateDamage(int attack, int defense)
-        => Math.Max(1, attack - (defense / 2) + Random.Shared.Next(-1, 2));
+    private static bool TryEscape(BattleSession battle)
+    {
+        var baseChance = 55 + Math.Clamp(battle.PlayerAgilityEquivalent() - battle.Monster.Agility, -20, 20);
+        return Random.Shared.Next(100) < baseChance;
+    }
+
+    private async Task<bool> TryCaptureAsync(long characterId, BattleSession battle, CancellationToken ct)
+    {
+        if (!battle.Monster.CaptureEnabled || battle.MonsterHp <= 0)
+            return false;
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        if (await db.CharacterPets.CountAsync(x => x.CharacterId == characterId, ct) >= MaxPetsPerCharacter)
+            return false;
+
+        var missingHpPercent = 100 - (battle.MonsterHp * 100 / battle.Monster.MaxHp);
+        var chance = Math.Clamp(battle.Monster.CaptureRate + missingHpPercent / 2, 1, 95);
+        if (Random.Shared.Next(100) >= chance)
+            return false;
+
+        var monster = battle.Monster;
+        db.CharacterPets.Add(new CharacterPet
+        {
+            CharacterId = characterId,
+            MonsterId = monster.Id,
+            Name = monster.Name,
+            Level = monster.Level,
+            Hp = monster.MaxHp,
+            MaxHp = monster.MaxHp,
+            Attack = monster.Attack,
+            Defense = monster.Defense,
+            Agility = monster.Agility,
+            Loyalty = 50,
+            Earth = monster.Earth,
+            Water = monster.Water,
+            Fire = monster.Fire,
+            Wind = monster.Wind
+        });
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    private async Task<int> TryGrantDropAsync(GameDbContext db, long characterId, MonsterDefinition monster, CancellationToken ct)
+    {
+        if (monster.DropItemId is not int itemId || monster.DropRate <= 0 || Random.Shared.Next(100) >= monster.DropRate)
+            return 0;
+        if (!items.TryGet(itemId, out var item) || item is null)
+            return 0;
+
+        var row = await db.CharacterItems.SingleOrDefaultAsync(x => x.CharacterId == characterId && x.ItemId == itemId, ct);
+        if (row is not null && row.Quantity < item.MaxStack)
+        {
+            row.Quantity++;
+            row.UpdatedAt = DateTimeOffset.UtcNow;
+            return itemId;
+        }
+
+        var usedSlots = await db.CharacterItems.Where(x => x.CharacterId == characterId).Select(x => x.Slot).ToListAsync(ct);
+        if (usedSlots.Count >= InventoryCapacity)
+            return 0;
+
+        short slot = 0;
+        while (usedSlots.Contains(slot)) slot++;
+        db.CharacterItems.Add(new CharacterItem
+        {
+            CharacterId = characterId,
+            ItemId = itemId,
+            Quantity = 1,
+            Slot = slot
+        });
+        return itemId;
+    }
+
+    private static int CalculateDamage(
+        int attack,
+        int defense,
+        byte aEarth, byte aWater, byte aFire, byte aWind,
+        byte dEarth, byte dWater, byte dFire, byte dWind)
+    {
+        var raw = Math.Max(1, attack - defense / 2 + Random.Shared.Next(-1, 2));
+        var advantage = (aWater * dFire + aFire * dWind + aWind * dEarth + aEarth * dWater)
+                      - (aFire * dWater + aWind * dFire + aEarth * dWind + aWater * dEarth);
+        var multiplier = Math.Clamp(1.0 + advantage / 20000.0, 0.75, 1.25);
+        return Math.Max(1, (int)Math.Round(raw * multiplier));
+    }
 
     private static long ExperienceForNextLevel(int level) => checked(level * 100L);
 
@@ -152,12 +284,17 @@ public sealed class BattlePacketHandler(
         writer.Write(battle.PlayerHp);
         writer.Write(battle.MonsterHp);
         writer.Write(battle.Monster.MaxHp);
+        writer.Write(battle.Monster.Earth);
+        writer.Write(battle.Monster.Water);
+        writer.Write(battle.Monster.Fire);
+        writer.Write(battle.Monster.Wind);
+        writer.Write(battle.Monster.CaptureEnabled ? (byte)1 : (byte)0);
         await stream.WriteAsync(PacketCodec.Encode(Opcode.BattleStart, ms.ToArray()), ct);
     }
 
     private static async Task SendTurnResultAsync(NetworkStream stream, BattleSession battle, byte action, int playerDamage, int monsterDamage, bool victory, bool defeat, CancellationToken ct)
     {
-        var payload = new byte[1 + 4 + 4 + 4 + 4 + 1 + 1];
+        var payload = new byte[19];
         payload[0] = action;
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(1, 4), playerDamage);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(5, 4), monsterDamage);
@@ -168,14 +305,18 @@ public sealed class BattlePacketHandler(
         await stream.WriteAsync(PacketCodec.Encode(Opcode.BattleTurnResult, payload), ct);
     }
 
-    private static async Task SendBattleEndAsync(NetworkStream stream, bool victory, int exp, int levelsGained, int level, long remainingExp, CancellationToken ct)
+    private static async Task SendBattleEndAsync(NetworkStream stream, byte result, int exp, int levelsGained, int level, long remainingExp, int rewardId, string message, CancellationToken ct)
     {
-        var payload = new byte[1 + 4 + 4 + 4 + 8];
-        payload[0] = victory ? (byte)1 : (byte)0;
+        var messageBytes = Encoding.UTF8.GetBytes(message);
+        var payload = new byte[1 + 4 + 4 + 4 + 8 + 4 + 2 + messageBytes.Length];
+        payload[0] = result; // 0 defeat, 1 victory, 2 escaped, 3 captured
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(1, 4), exp);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(5, 4), levelsGained);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(9, 4), level);
         BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(13, 8), remainingExp);
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(21, 4), rewardId);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(25, 2), checked((ushort)messageBytes.Length));
+        messageBytes.CopyTo(payload.AsSpan(27));
         await stream.WriteAsync(PacketCodec.Encode(Opcode.BattleEnd, payload), ct);
     }
 
@@ -185,4 +326,9 @@ public sealed class BattlePacketHandler(
         writer.Write(checked((ushort)bytes.Length));
         writer.Write(bytes);
     }
+}
+
+file static class BattleSessionExtensions
+{
+    public static int PlayerAgilityEquivalent(this BattleSession battle) => 5;
 }
