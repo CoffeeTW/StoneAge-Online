@@ -19,6 +19,8 @@ public sealed class InventoryShopPacketHandler(
     WorldManager world,
     ILogger<InventoryShopPacketHandler> logger) : IClientPacketHandler
 {
+    private const short InventoryCapacity = 20;
+
     public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken cancellationToken)
     {
         if (session.State != SessionState.InWorld || session.CharacterId is null)
@@ -38,16 +40,23 @@ public sealed class InventoryShopPacketHandler(
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var character = await db.Characters.AsNoTracking().SingleAsync(x => x.Id == characterId, ct);
-        var inventory = await db.CharacterItems.AsNoTracking().Where(x => x.CharacterId == characterId).OrderBy(x => x.Id).ToListAsync(ct);
+        var inventory = await db.CharacterItems.AsNoTracking()
+            .Where(x => x.CharacterId == characterId)
+            .OrderBy(x => x.Slot)
+            .ToListAsync(ct);
+
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, true);
         writer.Write(character.Stone);
+        writer.Write(InventoryCapacity);
         writer.Write(checked((ushort)inventory.Count));
         foreach (var row in inventory)
         {
             writer.Write(row.Id);
             writer.Write(row.ItemId);
             writer.Write(row.Quantity);
+            writer.Write(row.Slot);
+            writer.Write(row.EquippedSlot ?? (byte)0);
         }
         await stream.WriteAsync(PacketCodec.Encode(Opcode.InventoryListResponse, ms.ToArray()), ct);
     }
@@ -70,6 +79,7 @@ public sealed class InventoryShopPacketHandler(
             writer.Write(item.BuyPrice);
             writer.Write(item.SellPrice);
             writer.Write(item.MaxStack);
+            WriteString(writer, item.Type);
         }
         await stream.WriteAsync(PacketCodec.Encode(Opcode.ShopListResponse, ms.ToArray()), ct);
     }
@@ -82,7 +92,14 @@ public sealed class InventoryShopPacketHandler(
             return;
         }
 
-        var total = checked(item.BuyPrice * quantity);
+        int total;
+        try { total = checked(item.BuyPrice * quantity); }
+        catch (OverflowException)
+        {
+            await SendTradeResultAsync(stream, Opcode.ShopBuyResponse, false, "Invalid purchase quantity.", ct);
+            return;
+        }
+
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var character = await db.Characters.SingleAsync(x => x.Id == characterId, ct);
@@ -92,7 +109,8 @@ public sealed class InventoryShopPacketHandler(
             return;
         }
 
-        var row = await db.CharacterItems.SingleOrDefaultAsync(x => x.CharacterId == characterId && x.ItemId == itemId, ct);
+        var rows = await db.CharacterItems.Where(x => x.CharacterId == characterId).ToListAsync(ct);
+        var row = rows.SingleOrDefault(x => x.ItemId == itemId);
         var current = row?.Quantity ?? 0;
         if (current + quantity > item.MaxStack)
         {
@@ -102,12 +120,28 @@ public sealed class InventoryShopPacketHandler(
 
         character.Stone -= total;
         if (row is null)
-            db.CharacterItems.Add(new CharacterItem { CharacterId = characterId, ItemId = itemId, Quantity = quantity });
+        {
+            var freeSlot = FindFreeSlot(rows);
+            if (freeSlot is null)
+            {
+                await SendTradeResultAsync(stream, Opcode.ShopBuyResponse, false, "Inventory is full.", ct);
+                return;
+            }
+
+            db.CharacterItems.Add(new CharacterItem
+            {
+                CharacterId = characterId,
+                ItemId = itemId,
+                Quantity = quantity,
+                Slot = freeSlot.Value
+            });
+        }
         else
         {
             row.Quantity += quantity;
             row.UpdatedAt = DateTimeOffset.UtcNow;
         }
+
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         logger.LogInformation("Shop buy CharacterId={CharacterId} NpcId={NpcId} ItemId={ItemId} Quantity={Quantity} Total={Total}", characterId, npcId, itemId, quantity, total);
@@ -132,7 +166,20 @@ public sealed class InventoryShopPacketHandler(
             return;
         }
 
-        var total = checked(item.SellPrice * quantity);
+        if (row.EquippedSlot is not null)
+        {
+            await SendTradeResultAsync(stream, Opcode.ShopSellResponse, false, "Unequip the item before selling it.", ct);
+            return;
+        }
+
+        int total;
+        try { total = checked(item.SellPrice * quantity); }
+        catch (OverflowException)
+        {
+            await SendTradeResultAsync(stream, Opcode.ShopSellResponse, false, "Invalid sale quantity.", ct);
+            return;
+        }
+
         row.Quantity -= quantity;
         character.Stone = checked(character.Stone + total);
         if (row.Quantity == 0) db.CharacterItems.Remove(row);
@@ -141,6 +188,14 @@ public sealed class InventoryShopPacketHandler(
         await tx.CommitAsync(ct);
         logger.LogInformation("Shop sell CharacterId={CharacterId} NpcId={NpcId} ItemId={ItemId} Quantity={Quantity} Total={Total}", characterId, npcId, itemId, quantity, total);
         await SendTradeResultAsync(stream, Opcode.ShopSellResponse, true, "Sale complete.", ct);
+    }
+
+    private static short? FindFreeSlot(IReadOnlyCollection<CharacterItem> rows)
+    {
+        var used = rows.Select(x => x.Slot).ToHashSet();
+        for (short slot = 0; slot < InventoryCapacity; slot++)
+            if (!used.Contains(slot)) return slot;
+        return null;
     }
 
     private bool CanUseShop(long characterId, int npcId)

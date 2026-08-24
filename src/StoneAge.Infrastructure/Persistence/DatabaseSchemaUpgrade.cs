@@ -15,14 +15,35 @@ public static class DatabaseSchemaUpgrade
                 "CharacterId" bigint NOT NULL,
                 "ItemId" integer NOT NULL,
                 "Quantity" integer NOT NULL,
+                "Slot" smallint NOT NULL DEFAULT 0,
+                "EquippedSlot" smallint NULL,
                 "CreatedAt" timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 "UpdatedAt" timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT "FK_character_items_characters_CharacterId"
                     FOREIGN KEY ("CharacterId") REFERENCES characters ("Id") ON DELETE CASCADE
             );
 
+            ALTER TABLE character_items ADD COLUMN IF NOT EXISTS "Slot" smallint NOT NULL DEFAULT 0;
+            ALTER TABLE character_items ADD COLUMN IF NOT EXISTS "EquippedSlot" smallint NULL;
+
+            WITH ranked AS (
+                SELECT "Id", ROW_NUMBER() OVER (PARTITION BY "CharacterId" ORDER BY "Id") - 1 AS new_slot
+                FROM character_items
+            )
+            UPDATE character_items ci
+            SET "Slot" = ranked.new_slot
+            FROM ranked
+            WHERE ci."Id" = ranked."Id";
+
             CREATE UNIQUE INDEX IF NOT EXISTS "IX_character_items_CharacterId_ItemId"
                 ON character_items ("CharacterId", "ItemId");
+
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_character_items_CharacterId_Slot"
+                ON character_items ("CharacterId", "Slot");
+
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_character_items_CharacterId_EquippedSlot"
+                ON character_items ("CharacterId", "EquippedSlot")
+                WHERE "EquippedSlot" IS NOT NULL;
             """, cancellationToken);
     }
 }

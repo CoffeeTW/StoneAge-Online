@@ -38,7 +38,12 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
             entity.ToTable("character_items");
             entity.HasKey(x => x.Id);
             entity.HasIndex(x => new { x.CharacterId, x.ItemId }).IsUnique();
+            entity.HasIndex(x => new { x.CharacterId, x.Slot }).IsUnique();
+            entity.HasIndex(x => new { x.CharacterId, x.EquippedSlot })
+                .IsUnique()
+                .HasFilter("\"EquippedSlot\" IS NOT NULL");
             entity.Property(x => x.Quantity).IsRequired();
+            entity.Property(x => x.Slot).IsRequired();
             entity.HasOne(x => x.Character)
                 .WithMany(x => x.Inventory)
                 .HasForeignKey(x => x.CharacterId)

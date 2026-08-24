@@ -2,6 +2,13 @@ using System.Text.Json;
 
 namespace StoneAge.Game.Item;
 
+public enum EquipmentSlot : byte
+{
+    Weapon = 1,
+    Armor = 2,
+    Accessory = 3
+}
+
 public sealed class ItemDefinition
 {
     public int Id { get; init; }
@@ -9,6 +16,25 @@ public sealed class ItemDefinition
     public int BuyPrice { get; init; }
     public int SellPrice { get; init; }
     public int MaxStack { get; init; } = 99;
+    public string Type { get; init; } = "material";
+    public string? EquipSlot { get; init; }
+    public int HpRestore { get; init; }
+    public int MpRestore { get; init; }
+    public int AttackBonus { get; init; }
+    public int DefenseBonus { get; init; }
+    public int AgilityBonus { get; init; }
+
+    public bool IsConsumable => Type.Equals("consumable", StringComparison.OrdinalIgnoreCase);
+    public bool IsEquipment => TryGetEquipmentSlot(out _);
+
+    public bool TryGetEquipmentSlot(out EquipmentSlot slot)
+    {
+        slot = default;
+        if (string.IsNullOrWhiteSpace(EquipSlot))
+            return false;
+
+        return Enum.TryParse(EquipSlot, ignoreCase: true, out slot) && Enum.IsDefined(slot);
+    }
 }
 
 public sealed class ItemCatalog
