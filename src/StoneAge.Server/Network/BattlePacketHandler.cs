@@ -34,15 +34,17 @@ public sealed class BattlePacketHandler(
 
         var attack = character.Strength;
         var defense = character.Vitality;
+        var agility = character.Agility;
         foreach (var row in equipped)
         {
             if (!items.TryGet(row.ItemId, out var item) || item is null) continue;
             attack += item.AttackBonus;
             defense += item.DefenseBonus;
+            agility += item.AgilityBonus;
         }
 
         var battle = battles.TryStart(
-            characterId, mapId, character.Hp, attack, defense,
+            characterId, mapId, character.Hp, attack, defense, agility,
             character.Earth, character.Water, character.Fire, character.Wind);
         if (battle is null)
             return false;
@@ -81,28 +83,20 @@ public sealed class BattlePacketHandler(
             return;
 
         var action = payload[0]; // 1=Attack, 2=Defend, 3=Escape, 4=Capture
-        if (action == 3)
+        if (action == 3 && TryEscape(battle))
         {
-            var escaped = TryEscape(battle);
-            if (escaped)
-            {
-                battles.End(characterId);
-                session.LeaveBattle();
-                await SendBattleEndAsync(stream, 2, 0, 0, 0, 0, 0, "Escaped.", ct);
-                return;
-            }
+            battles.End(characterId);
+            session.LeaveBattle();
+            await SendBattleEndAsync(stream, 2, 0, 0, 0, 0, 0, "Escaped.", ct);
+            return;
         }
 
-        if (action == 4)
+        if (action == 4 && await TryCaptureAsync(characterId, battle, ct))
         {
-            var captured = await TryCaptureAsync(characterId, battle, ct);
-            if (captured)
-            {
-                battles.End(characterId);
-                session.LeaveBattle();
-                await SendBattleEndAsync(stream, 3, 0, 0, 0, 0, battle.Monster.Id, "Captured.", ct);
-                return;
-            }
+            battles.End(characterId);
+            session.LeaveBattle();
+            await SendBattleEndAsync(stream, 3, 0, 0, 0, 0, battle.Monster.Id, "Captured.", ct);
+            return;
         }
 
         var playerDamage = 0;
@@ -161,7 +155,6 @@ public sealed class BattlePacketHandler(
 
         character.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
-
         await SendTurnResultAsync(stream, battle, action, playerDamage, monsterDamage, victory, defeat, ct);
 
         if (victory || defeat)
@@ -188,8 +181,8 @@ public sealed class BattlePacketHandler(
 
     private static bool TryEscape(BattleSession battle)
     {
-        var baseChance = 55 + Math.Clamp(battle.PlayerAgilityEquivalent() - battle.Monster.Agility, -20, 20);
-        return Random.Shared.Next(100) < baseChance;
+        var chance = 55 + Math.Clamp(battle.PlayerAgility - battle.Monster.Agility, -20, 20);
+        return Random.Shared.Next(100) < chance;
     }
 
     private async Task<bool> TryCaptureAsync(long characterId, BattleSession battle, CancellationToken ct)
@@ -309,7 +302,7 @@ public sealed class BattlePacketHandler(
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 4 + 4 + 4 + 8 + 4 + 2 + messageBytes.Length];
-        payload[0] = result; // 0 defeat, 1 victory, 2 escaped, 3 captured
+        payload[0] = result;
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(1, 4), exp);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(5, 4), levelsGained);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(9, 4), level);
@@ -326,9 +319,4 @@ public sealed class BattlePacketHandler(
         writer.Write(checked((ushort)bytes.Length));
         writer.Write(bytes);
     }
-}
-
-file static class BattleSessionExtensions
-{
-    public static int PlayerAgilityEquivalent(this BattleSession battle) => 5;
 }
