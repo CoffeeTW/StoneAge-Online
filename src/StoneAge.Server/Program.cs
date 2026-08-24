@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using StoneAge.Domain.Entities;
+using StoneAge.Game.Item;
 using StoneAge.Game.Npc;
 using StoneAge.Game.World;
 using StoneAge.Infrastructure.Persistence;
@@ -19,11 +20,13 @@ builder.Services.AddDbContextFactory<GameDbContext>(options =>
 builder.Services.AddSingleton<Pbkdf2PasswordHasher>();
 builder.Services.AddSingleton<WorldManager>();
 builder.Services.AddSingleton<NpcManager>();
+builder.Services.AddSingleton(_ => ItemCatalog.Load(Path.Combine(AppContext.BaseDirectory, "data", "items", "items.json")));
 builder.Services.AddSingleton<WorldConnectionRegistry>();
 builder.Services.AddSingleton<LoginPacketHandler>();
 builder.Services.AddSingleton<CharacterPacketHandler>();
 builder.Services.AddSingleton<WorldPacketHandler>();
 builder.Services.AddSingleton<NpcPacketHandler>();
+builder.Services.AddSingleton<InventoryShopPacketHandler>();
 builder.Services.AddSingleton<IClientPacketHandler, CompositePacketHandler>();
 builder.Services.AddSingleton<TcpGameServer>();
 builder.Services.AddHostedService<GameServerWorker>();
@@ -37,6 +40,7 @@ await using (var scope = host.Services.CreateAsyncScope())
     var hasher = scope.ServiceProvider.GetRequiredService<Pbkdf2PasswordHasher>();
     await using var db = await factory.CreateDbContextAsync();
     await db.Database.EnsureCreatedAsync();
+    await DatabaseSchemaUpgrade.ApplyAsync(db);
 
     if (!await db.Accounts.AnyAsync(x => x.Username == "test"))
     {
