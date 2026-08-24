@@ -36,4 +36,13 @@ public sealed class GameSession
         State = SessionState.CharacterSelected;
         return true;
     }
+
+    public bool EnterWorld()
+    {
+        if (State != SessionState.CharacterSelected || CharacterId is null)
+            return false;
+
+        State = SessionState.InWorld;
+        return true;
+    }
 }
