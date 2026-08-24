@@ -28,4 +28,5 @@ public sealed class Character
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     public Account? Account { get; set; }
     public List<CharacterItem> Inventory { get; set; } = [];
+    public List<CharacterPet> Pets { get; set; } = [];
 }
