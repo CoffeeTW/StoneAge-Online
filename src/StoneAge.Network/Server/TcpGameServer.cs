@@ -44,7 +44,7 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
         try
         {
             await using var stream = client.GetStream();
-            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-02");
+            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-04");
             await stream.WriteAsync(PacketCodec.Encode(Opcode.Hello, helloPayload), cancellationToken);
 
             while (!cancellationToken.IsCancellationRequested)
@@ -66,6 +66,18 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
         }
         finally
         {
+            if (packetHandler is IClientConnectionLifecycle lifecycle)
+            {
+                try
+                {
+                    await lifecycle.OnDisconnectedAsync(session, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    log($"Disconnect cleanup error {endpoint}: {ex.Message}");
+                }
+            }
+
             client.Dispose();
             log($"Client disconnected: {endpoint} Session={session.SessionId}");
         }
