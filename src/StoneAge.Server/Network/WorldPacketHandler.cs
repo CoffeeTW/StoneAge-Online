@@ -13,6 +13,7 @@ public sealed class WorldPacketHandler(
     IDbContextFactory<GameDbContext> dbFactory,
     WorldManager world,
     WorldConnectionRegistry connections,
+    BattlePacketHandler battleHandler,
     ILogger<WorldPacketHandler> logger) : IClientPacketHandler
 {
     public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken cancellationToken)
@@ -20,13 +21,14 @@ public sealed class WorldPacketHandler(
         return packet.Opcode switch
         {
             Opcode.EnterWorld => EnterWorldAsync(session, stream, cancellationToken),
-            Opcode.MoveRequest => MoveAsync(session, packet.Payload, cancellationToken),
+            Opcode.MoveRequest => MoveAsync(session, packet.Payload, stream, cancellationToken),
             _ => Task.CompletedTask
         };
     }
 
     public async Task DisconnectAsync(GameSession session)
     {
+        battleHandler.Disconnect(session);
         if (session.CharacterId is not long characterId)
             return;
 
@@ -103,7 +105,7 @@ public sealed class WorldPacketHandler(
             await connections.SendAsync(other.CharacterId, newPlayerPacket, cancellationToken);
     }
 
-    private async Task MoveAsync(GameSession session, byte[] payload, CancellationToken cancellationToken)
+    private async Task MoveAsync(GameSession session, byte[] payload, NetworkStream stream, CancellationToken cancellationToken)
     {
         if (session.State != SessionState.InWorld || session.CharacterId is null || payload.Length != 5)
             return;
@@ -119,6 +121,8 @@ public sealed class WorldPacketHandler(
         var packet = BuildMoveBroadcast(player);
         foreach (var other in world.GetPlayersInMap(player.MapId))
             await connections.SendAsync(other.CharacterId, packet, cancellationToken);
+
+        await battleHandler.TryStartEncounterAsync(session, stream, player.MapId, cancellationToken);
     }
 
     private static byte[] BuildPlayerEnterBroadcast(PlayerRuntime player)
