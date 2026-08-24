@@ -1,0 +1,35 @@
+using Microsoft.EntityFrameworkCore;
+using StoneAge.Domain.Entities;
+
+namespace StoneAge.Infrastructure.Persistence;
+
+public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbContext(options)
+{
+    public DbSet<Account> Accounts => Set<Account>();
+    public DbSet<Character> Characters => Set<Character>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Account>(entity =>
+        {
+            entity.ToTable("accounts");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Username).HasMaxLength(32).IsRequired();
+            entity.Property(x => x.PasswordHash).HasMaxLength(255).IsRequired();
+            entity.HasIndex(x => x.Username).IsUnique();
+            entity.Property(x => x.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
+        modelBuilder.Entity<Character>(entity =>
+        {
+            entity.ToTable("characters");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Name).HasMaxLength(24).IsRequired();
+            entity.HasIndex(x => x.Name).IsUnique();
+            entity.HasOne(x => x.Account)
+                .WithMany(x => x.Characters)
+                .HasForeignKey(x => x.AccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+}
