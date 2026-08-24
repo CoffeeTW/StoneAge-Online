@@ -54,6 +54,7 @@ public sealed class BattleSession
         int playerHp,
         int playerAttack,
         int playerDefense,
+        int playerAgility,
         byte earth,
         byte water,
         byte fire,
@@ -64,6 +65,7 @@ public sealed class BattleSession
         PlayerHp = playerHp;
         PlayerAttack = playerAttack;
         PlayerDefense = playerDefense;
+        PlayerAgility = playerAgility;
         PlayerEarth = earth;
         PlayerWater = water;
         PlayerFire = fire;
@@ -76,6 +78,7 @@ public sealed class BattleSession
     public int PlayerHp { get; set; }
     public int PlayerAttack { get; }
     public int PlayerDefense { get; }
+    public int PlayerAgility { get; }
     public byte PlayerEarth { get; }
     public byte PlayerWater { get; }
     public byte PlayerFire { get; }
@@ -98,6 +101,7 @@ public sealed class BattleManager(MonsterCatalog monsters)
         int playerHp,
         int playerAttack,
         int playerDefense,
+        int playerAgility,
         byte earth,
         byte water,
         byte fire,
@@ -125,7 +129,9 @@ public sealed class BattleManager(MonsterCatalog monsters)
         }
 
         var monster = selected ?? candidates[^1];
-        var battle = new BattleSession(characterId, monster, playerHp, playerAttack, playerDefense, earth, water, fire, wind);
+        var battle = new BattleSession(
+            characterId, monster, playerHp, playerAttack, playerDefense, playerAgility,
+            earth, water, fire, wind);
         return _battles.TryAdd(characterId, battle) ? battle : null;
     }
 }
