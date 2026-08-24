@@ -6,6 +6,8 @@ public sealed class CharacterItem
     public long CharacterId { get; set; }
     public int ItemId { get; set; }
     public int Quantity { get; set; }
+    public short Slot { get; set; }
+    public byte? EquippedSlot { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     public Character? Character { get; set; }
