@@ -5,7 +5,7 @@ using StoneAge.Network.Protocol;
 
 namespace StoneAge.Network.Server;
 
-public sealed class TcpGameServer
+public sealed class TcpGameServer(IClientPacketHandler packetHandler)
 {
     private TcpListener? _listener;
 
@@ -25,7 +25,6 @@ public sealed class TcpGameServer
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Normal shutdown.
         }
         finally
         {
@@ -33,29 +32,29 @@ public sealed class TcpGameServer
         }
     }
 
-    private static async Task HandleClientAsync(
+    private async Task HandleClientAsync(
         TcpClient client,
         Action<string> log,
         CancellationToken cancellationToken)
     {
         var endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
-        log($"Client connected: {endpoint}");
+        var session = new GameSession();
+        log($"Client connected: {endpoint} Session={session.SessionId}");
 
         try
         {
             await using var stream = client.GetStream();
-            var payload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-01");
-            var packet = PacketCodec.Encode(Opcode.Hello, payload);
-            await stream.WriteAsync(packet, cancellationToken);
+            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-02");
+            await stream.WriteAsync(PacketCodec.Encode(Opcode.Hello, helloPayload), cancellationToken);
 
-            var buffer = new byte[1024];
             while (!cancellationToken.IsCancellationRequested)
             {
-                var read = await stream.ReadAsync(buffer, cancellationToken);
-                if (read == 0)
+                var packet = await PacketReader.ReadAsync(stream, cancellationToken);
+                if (packet is null)
                     break;
 
-                log($"RX {read} bytes from {endpoint}");
+                log($"RX Opcode={packet.Opcode} Payload={packet.Payload.Length} Session={session.SessionId}");
+                await packetHandler.HandleAsync(session, packet, stream, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -68,7 +67,7 @@ public sealed class TcpGameServer
         finally
         {
             client.Dispose();
-            log($"Client disconnected: {endpoint}");
+            log($"Client disconnected: {endpoint} Session={session.SessionId}");
         }
     }
 }
