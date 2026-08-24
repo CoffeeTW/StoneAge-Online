@@ -14,8 +14,11 @@ public sealed class GameSession
     public long? AccountId { get; private set; }
     public long? CharacterId { get; private set; }
     public SessionState State { get; private set; } = SessionState.Connected;
+    public DateTimeOffset LastActivityAt { get; private set; } = DateTimeOffset.UtcNow;
 
     public bool IsAuthenticated => State >= SessionState.Authenticated;
+
+    public void Touch() => LastActivityAt = DateTimeOffset.UtcNow;
 
     public bool Authenticate(long accountId)
     {
@@ -24,6 +27,7 @@ public sealed class GameSession
 
         AccountId = accountId;
         State = SessionState.Authenticated;
+        Touch();
         return true;
     }
 
@@ -34,6 +38,7 @@ public sealed class GameSession
 
         CharacterId = characterId;
         State = SessionState.CharacterSelected;
+        Touch();
         return true;
     }
 
@@ -43,6 +48,7 @@ public sealed class GameSession
             return false;
 
         State = SessionState.InWorld;
+        Touch();
         return true;
     }
 }

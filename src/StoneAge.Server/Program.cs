@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using StoneAge.Domain.Entities;
+using StoneAge.Game.Npc;
 using StoneAge.Game.World;
 using StoneAge.Infrastructure.Persistence;
 using StoneAge.Network.Server;
@@ -17,13 +18,16 @@ builder.Services.AddDbContextFactory<GameDbContext>(options =>
 
 builder.Services.AddSingleton<Pbkdf2PasswordHasher>();
 builder.Services.AddSingleton<WorldManager>();
+builder.Services.AddSingleton<NpcManager>();
 builder.Services.AddSingleton<WorldConnectionRegistry>();
 builder.Services.AddSingleton<LoginPacketHandler>();
 builder.Services.AddSingleton<CharacterPacketHandler>();
 builder.Services.AddSingleton<WorldPacketHandler>();
+builder.Services.AddSingleton<NpcPacketHandler>();
 builder.Services.AddSingleton<IClientPacketHandler, CompositePacketHandler>();
 builder.Services.AddSingleton<TcpGameServer>();
 builder.Services.AddHostedService<GameServerWorker>();
+builder.Services.AddHostedService<WorldAutosaveWorker>();
 
 var host = builder.Build();
 

@@ -18,11 +18,22 @@ public sealed class PlayerRuntime
     public short X { get; private set; }
     public short Y { get; private set; }
     public byte Direction { get; private set; }
+    public DateTimeOffset LastMoveAt { get; private set; } = DateTimeOffset.MinValue;
 
     public void MoveTo(short x, short y, byte direction)
     {
         X = x;
         Y = y;
         Direction = direction;
+        LastMoveAt = DateTimeOffset.UtcNow;
+    }
+
+    public void TeleportTo(int mapId, short x, short y, byte direction)
+    {
+        MapId = mapId;
+        X = x;
+        Y = y;
+        Direction = direction;
+        LastMoveAt = DateTimeOffset.UtcNow;
     }
 }
