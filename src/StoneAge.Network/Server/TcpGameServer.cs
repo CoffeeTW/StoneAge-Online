@@ -7,6 +7,7 @@ namespace StoneAge.Network.Server;
 
 public sealed class TcpGameServer(IClientPacketHandler packetHandler)
 {
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(90);
     private TcpListener? _listener;
 
     public async Task RunAsync(int port, Action<string> log, CancellationToken cancellationToken)
@@ -32,10 +33,7 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
         }
     }
 
-    private async Task HandleClientAsync(
-        TcpClient client,
-        Action<string> log,
-        CancellationToken cancellationToken)
+    private async Task HandleClientAsync(TcpClient client, Action<string> log, CancellationToken cancellationToken)
     {
         var endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
         var session = new GameSession();
@@ -44,15 +42,27 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
         try
         {
             await using var stream = client.GetStream();
-            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-04");
+            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-05");
             await stream.WriteAsync(PacketCodec.Encode(Opcode.Hello, helloPayload), cancellationToken);
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                var packet = await PacketReader.ReadAsync(stream, cancellationToken);
+                PacketFrame? packet;
+                try
+                {
+                    packet = await PacketReader.ReadAsync(stream, cancellationToken)
+                        .WaitAsync(IdleTimeout, cancellationToken);
+                }
+                catch (TimeoutException)
+                {
+                    log($"Idle timeout: {endpoint} Session={session.SessionId}");
+                    break;
+                }
+
                 if (packet is null)
                     break;
 
+                session.Touch();
                 log($"RX Opcode={packet.Opcode} Payload={packet.Payload.Length} Session={session.SessionId}");
                 await packetHandler.HandleAsync(session, packet, stream, cancellationToken);
             }
