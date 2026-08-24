@@ -8,6 +8,7 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<Character> Characters => Set<Character>();
     public DbSet<CharacterItem> CharacterItems => Set<CharacterItem>();
+    public DbSet<CharacterPet> CharacterPets => Set<CharacterPet>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -46,6 +47,20 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
             entity.Property(x => x.Slot).IsRequired();
             entity.HasOne(x => x.Character)
                 .WithMany(x => x.Inventory)
+                .HasForeignKey(x => x.CharacterId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CharacterPet>(entity =>
+        {
+            entity.ToTable("character_pets");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Name).HasMaxLength(24).IsRequired();
+            entity.HasIndex(x => new { x.CharacterId, x.IsActive })
+                .IsUnique()
+                .HasFilter("\"IsActive\" = TRUE");
+            entity.HasOne(x => x.Character)
+                .WithMany(x => x.Pets)
                 .HasForeignKey(x => x.CharacterId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
