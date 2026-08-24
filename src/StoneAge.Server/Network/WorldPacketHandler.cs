@@ -43,6 +43,10 @@ public sealed class WorldPacketHandler(
                 character.UpdatedAt = DateTimeOffset.UtcNow;
                 await db.SaveChangesAsync();
             }
+
+            var leavePacket = BuildPlayerLeaveBroadcast(characterId);
+            foreach (var other in world.GetPlayersInMap(player.MapId).Where(x => x.CharacterId != characterId))
+                await connections.SendAsync(other.CharacterId, leavePacket, CancellationToken.None);
         }
 
         connections.Unregister(characterId);
@@ -70,6 +74,8 @@ public sealed class WorldPacketHandler(
         }
 
         var player = new PlayerRuntime(character.Id, character.Name, character.MapId, character.X, character.Y, character.Direction);
+        var existingPlayers = world.GetPlayersInMap(player.MapId).ToArray();
+
         if (!world.Enter(player) || !connections.Register(character.Id, stream))
         {
             world.Leave(character.Id);
@@ -88,6 +94,13 @@ public sealed class WorldPacketHandler(
 
         logger.LogInformation("Player entered world CharacterId={CharacterId} Map={MapId} X={X} Y={Y}", player.CharacterId, player.MapId, player.X, player.Y);
         await SendEnterWorldResponseAsync(stream, true, player, "Entered world.", cancellationToken);
+
+        foreach (var existing in existingPlayers)
+            await connections.SendAsync(player.CharacterId, BuildPlayerEnterBroadcast(existing), cancellationToken);
+
+        var newPlayerPacket = BuildPlayerEnterBroadcast(player);
+        foreach (var other in existingPlayers)
+            await connections.SendAsync(other.CharacterId, newPlayerPacket, cancellationToken);
     }
 
     private async Task MoveAsync(GameSession session, byte[] payload, CancellationToken cancellationToken)
@@ -108,9 +121,31 @@ public sealed class WorldPacketHandler(
             await connections.SendAsync(other.CharacterId, packet, cancellationToken);
     }
 
+    private static byte[] BuildPlayerEnterBroadcast(PlayerRuntime player)
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        writer.Write(player.CharacterId);
+        var nameBytes = Encoding.UTF8.GetBytes(player.Name);
+        writer.Write(checked((ushort)nameBytes.Length));
+        writer.Write(nameBytes);
+        writer.Write(player.MapId);
+        writer.Write(player.X);
+        writer.Write(player.Y);
+        writer.Write(player.Direction);
+        return PacketCodec.Encode(Opcode.PlayerEnterBroadcast, ms.ToArray());
+    }
+
+    private static byte[] BuildPlayerLeaveBroadcast(long characterId)
+    {
+        var payload = new byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(payload, characterId);
+        return PacketCodec.Encode(Opcode.PlayerLeaveBroadcast, payload);
+    }
+
     private static byte[] BuildMoveBroadcast(PlayerRuntime player)
     {
-        var payload = new byte[8 + 4 + 2 + 2 + 1];
+        var payload = new byte[17];
         BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(0, 8), player.CharacterId);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(8, 4), player.MapId);
         BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(12, 2), player.X);
@@ -119,12 +154,7 @@ public sealed class WorldPacketHandler(
         return PacketCodec.Encode(Opcode.MoveBroadcast, payload);
     }
 
-    private static async Task SendEnterWorldResponseAsync(
-        NetworkStream stream,
-        bool success,
-        PlayerRuntime? player,
-        string message,
-        CancellationToken cancellationToken)
+    private static async Task SendEnterWorldResponseAsync(NetworkStream stream, bool success, PlayerRuntime? player, string message, CancellationToken cancellationToken)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);

@@ -23,6 +23,7 @@ public sealed class CompositePacketHandler(
             Opcode.CharacterCreateRequest or
             Opcode.CharacterSelectRequest => characterHandler.HandleAsync(session, packet, stream, cancellationToken),
             Opcode.EnterWorld or Opcode.MoveRequest => worldHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.Ping => stream.WriteAsync(PacketCodec.Encode(Opcode.Pong, packet.Payload), cancellationToken).AsTask(),
             _ => HandleUnknownAsync(session, packet)
         };
     }
@@ -32,11 +33,7 @@ public sealed class CompositePacketHandler(
 
     private Task HandleUnknownAsync(GameSession session, PacketFrame packet)
     {
-        logger.LogWarning(
-            "Unhandled opcode {Opcode} SessionId={SessionId}",
-            packet.Opcode,
-            session.SessionId);
-
+        logger.LogWarning("Unhandled opcode {Opcode} SessionId={SessionId}", packet.Opcode, session.SessionId);
         return Task.CompletedTask;
     }
 }

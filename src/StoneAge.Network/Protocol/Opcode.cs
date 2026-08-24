@@ -14,6 +14,8 @@ public enum Opcode : ushort
     CharacterSelectResponse = 0x0206,
     EnterWorld = 0x0301,
     LeaveWorld = 0x0302,
+    PlayerEnterBroadcast = 0x0303,
+    PlayerLeaveBroadcast = 0x0304,
     MoveRequest = 0x0401,
     MoveBroadcast = 0x0402,
     Ping = 0x0501,
