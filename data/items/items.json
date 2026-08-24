@@ -1,5 +1,50 @@
 [
-  { "id": 20001, "name": "Small Herb", "buyPrice": 50, "sellPrice": 20, "maxStack": 99 },
-  { "id": 20002, "name": "Wooden Club", "buyPrice": 250, "sellPrice": 100, "maxStack": 1 },
-  { "id": 20003, "name": "Stone Fruit", "buyPrice": 80, "sellPrice": 30, "maxStack": 99 }
+  {
+    "id": 20001,
+    "name": "Small Herb",
+    "buyPrice": 50,
+    "sellPrice": 20,
+    "maxStack": 99,
+    "type": "consumable",
+    "hpRestore": 30
+  },
+  {
+    "id": 20002,
+    "name": "Wooden Club",
+    "buyPrice": 250,
+    "sellPrice": 100,
+    "maxStack": 1,
+    "type": "equipment",
+    "equipSlot": "Weapon",
+    "attackBonus": 3
+  },
+  {
+    "id": 20003,
+    "name": "Stone Fruit",
+    "buyPrice": 80,
+    "sellPrice": 30,
+    "maxStack": 99,
+    "type": "consumable",
+    "mpRestore": 20
+  },
+  {
+    "id": 20004,
+    "name": "Hide Vest",
+    "buyPrice": 300,
+    "sellPrice": 120,
+    "maxStack": 1,
+    "type": "equipment",
+    "equipSlot": "Armor",
+    "defenseBonus": 3
+  },
+  {
+    "id": 20005,
+    "name": "Bone Charm",
+    "buyPrice": 400,
+    "sellPrice": 160,
+    "maxStack": 1,
+    "type": "equipment",
+    "equipSlot": "Accessory",
+    "agilityBonus": 2
+  }
 ]
