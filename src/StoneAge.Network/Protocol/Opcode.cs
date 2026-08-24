@@ -40,5 +40,9 @@ public enum Opcode : ushort
     ShopBuyRequest = 0x0712,
     ShopBuyResponse = 0x0713,
     ShopSellRequest = 0x0714,
-    ShopSellResponse = 0x0715
+    ShopSellResponse = 0x0715,
+    BattleStart = 0x0801,
+    BattleActionRequest = 0x0802,
+    BattleTurnResult = 0x0803,
+    BattleEnd = 0x0804
 }
