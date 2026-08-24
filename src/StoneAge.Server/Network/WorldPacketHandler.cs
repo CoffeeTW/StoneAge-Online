@@ -25,16 +25,29 @@ public sealed class WorldPacketHandler(
         };
     }
 
-    public Task DisconnectAsync(GameSession session)
+    public async Task DisconnectAsync(GameSession session)
     {
-        if (session.CharacterId is long characterId)
+        if (session.CharacterId is not long characterId)
+            return;
+
+        if (world.TryGetPlayer(characterId, out var player) && player is not null)
         {
-            connections.Unregister(characterId);
-            world.Leave(characterId);
-            logger.LogInformation("Player left world CharacterId={CharacterId} SessionId={SessionId}", characterId, session.SessionId);
+            await using var db = await dbFactory.CreateDbContextAsync();
+            var character = await db.Characters.SingleOrDefaultAsync(x => x.Id == characterId);
+            if (character is not null)
+            {
+                character.MapId = player.MapId;
+                character.X = player.X;
+                character.Y = player.Y;
+                character.Direction = player.Direction;
+                character.UpdatedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync();
+            }
         }
 
-        return Task.CompletedTask;
+        connections.Unregister(characterId);
+        world.Leave(characterId);
+        logger.LogInformation("Player left world CharacterId={CharacterId} SessionId={SessionId}", characterId, session.SessionId);
     }
 
     private async Task EnterWorldAsync(GameSession session, NetworkStream stream, CancellationToken cancellationToken)
