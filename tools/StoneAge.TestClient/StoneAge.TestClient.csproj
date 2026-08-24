@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../../src/StoneAge.Network/StoneAge.Network.csproj" />
+  </ItemGroup>
+</Project>

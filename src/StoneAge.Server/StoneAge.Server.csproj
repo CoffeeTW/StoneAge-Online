@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <ItemGroup>
+    <ProjectReference Include="../StoneAge.Network/StoneAge.Network.csproj" />
+    <ProjectReference Include="../StoneAge.Game/StoneAge.Game.csproj" />
+    <ProjectReference Include="../StoneAge.Infrastructure/StoneAge.Infrastructure.csproj" />
+    <ProjectReference Include="../StoneAge.Shared/StoneAge.Shared.csproj" />
+  </ItemGroup>
+</Project>
