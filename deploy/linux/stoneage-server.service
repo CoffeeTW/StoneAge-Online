@@ -1,0 +1,25 @@
+[Unit]
+Description=StoneAge Online Game Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stoneage
+Group=stoneage
+WorkingDirectory=/opt/stoneage/server
+EnvironmentFile=/etc/stoneage/stoneage.env
+ExecStart=/usr/bin/dotnet /opt/stoneage/server/StoneAge.Server.dll
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/stoneage /var/log/stoneage
+
+[Install]
+WantedBy=multi-user.target
