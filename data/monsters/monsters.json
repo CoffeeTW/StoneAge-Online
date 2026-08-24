@@ -1,4 +1,42 @@
 [
-  { "id": 30001, "name": "Young Boar", "level": 1, "maxHp": 35, "attack": 6, "defense": 3, "agility": 4, "expReward": 18, "maps": [1000] },
-  { "id": 30002, "name": "Green Lizard", "level": 2, "maxHp": 45, "attack": 8, "defense": 4, "agility": 6, "expReward": 28, "maps": [1001] }
+  {
+    "id": 30001,
+    "name": "Young Boar",
+    "level": 1,
+    "maxHp": 35,
+    "attack": 6,
+    "defense": 3,
+    "agility": 4,
+    "expReward": 18,
+    "encounterWeight": 70,
+    "earth": 40,
+    "water": 20,
+    "fire": 20,
+    "wind": 20,
+    "captureEnabled": true,
+    "captureRate": 35,
+    "dropItemId": 20001,
+    "dropRate": 30,
+    "maps": [1000]
+  },
+  {
+    "id": 30002,
+    "name": "Green Lizard",
+    "level": 2,
+    "maxHp": 45,
+    "attack": 8,
+    "defense": 4,
+    "agility": 6,
+    "expReward": 28,
+    "encounterWeight": 30,
+    "earth": 10,
+    "water": 20,
+    "fire": 20,
+    "wind": 50,
+    "captureEnabled": true,
+    "captureRate": 25,
+    "dropItemId": 20003,
+    "dropRate": 20,
+    "maps": [1001]
+  }
 ]
