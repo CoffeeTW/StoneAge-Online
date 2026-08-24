@@ -4,6 +4,8 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using StoneAge.Domain.Entities;
 using StoneAge.Game.Item;
+using StoneAge.Game.Npc;
+using StoneAge.Game.World;
 using StoneAge.Infrastructure.Persistence;
 using StoneAge.Network.Protocol;
 using StoneAge.Network.Server;
@@ -13,6 +15,8 @@ namespace StoneAge.Server.Network;
 public sealed class InventoryShopPacketHandler(
     IDbContextFactory<GameDbContext> dbFactory,
     ItemCatalog items,
+    NpcManager npcs,
+    WorldManager world,
     ILogger<InventoryShopPacketHandler> logger) : IClientPacketHandler
 {
     public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken cancellationToken)
@@ -23,7 +27,7 @@ public sealed class InventoryShopPacketHandler(
         return packet.Opcode switch
         {
             Opcode.InventoryListRequest => SendInventoryAsync(session.CharacterId.Value, stream, cancellationToken),
-            Opcode.ShopListRequest => SendShopListAsync(stream, cancellationToken),
+            Opcode.ShopListRequest => SendShopListAsync(session.CharacterId.Value, packet.Payload, stream, cancellationToken),
             Opcode.ShopBuyRequest => BuyAsync(session.CharacterId.Value, packet.Payload, stream, cancellationToken),
             Opcode.ShopSellRequest => SellAsync(session.CharacterId.Value, packet.Payload, stream, cancellationToken),
             _ => Task.CompletedTask
@@ -48,8 +52,14 @@ public sealed class InventoryShopPacketHandler(
         await stream.WriteAsync(PacketCodec.Encode(Opcode.InventoryListResponse, ms.ToArray()), ct);
     }
 
-    private async Task SendShopListAsync(NetworkStream stream, CancellationToken ct)
+    private async Task SendShopListAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
     {
+        if (!TryReadNpc(payload, out var npcId) || !CanUseShop(characterId, npcId))
+        {
+            await stream.WriteAsync(PacketCodec.Encode(Opcode.ShopListResponse, new byte[] { 0, 0 }), ct);
+            return;
+        }
+
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, true);
         writer.Write(checked((ushort)items.All.Count));
@@ -66,7 +76,7 @@ public sealed class InventoryShopPacketHandler(
 
     private async Task BuyAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
     {
-        if (!TryReadTrade(payload, out var itemId, out var quantity) || quantity <= 0 || !items.TryGet(itemId, out var item) || item is null)
+        if (!TryReadTrade(payload, out var npcId, out var itemId, out var quantity) || !CanUseShop(characterId, npcId) || quantity <= 0 || !items.TryGet(itemId, out var item) || item is null)
         {
             await SendTradeResultAsync(stream, Opcode.ShopBuyResponse, false, "Invalid purchase.", ct);
             return;
@@ -98,16 +108,15 @@ public sealed class InventoryShopPacketHandler(
             row.Quantity += quantity;
             row.UpdatedAt = DateTimeOffset.UtcNow;
         }
-
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
-        logger.LogInformation("Shop buy CharacterId={CharacterId} ItemId={ItemId} Quantity={Quantity} Total={Total}", characterId, itemId, quantity, total);
+        logger.LogInformation("Shop buy CharacterId={CharacterId} NpcId={NpcId} ItemId={ItemId} Quantity={Quantity} Total={Total}", characterId, npcId, itemId, quantity, total);
         await SendTradeResultAsync(stream, Opcode.ShopBuyResponse, true, "Purchase complete.", ct);
     }
 
     private async Task SellAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
     {
-        if (!TryReadTrade(payload, out var itemId, out var quantity) || quantity <= 0 || !items.TryGet(itemId, out var item) || item is null)
+        if (!TryReadTrade(payload, out var npcId, out var itemId, out var quantity) || !CanUseShop(characterId, npcId) || quantity <= 0 || !items.TryGet(itemId, out var item) || item is null)
         {
             await SendTradeResultAsync(stream, Opcode.ShopSellResponse, false, "Invalid sale.", ct);
             return;
@@ -128,19 +137,34 @@ public sealed class InventoryShopPacketHandler(
         character.Stone = checked(character.Stone + total);
         if (row.Quantity == 0) db.CharacterItems.Remove(row);
         else row.UpdatedAt = DateTimeOffset.UtcNow;
-
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
-        logger.LogInformation("Shop sell CharacterId={CharacterId} ItemId={ItemId} Quantity={Quantity} Total={Total}", characterId, itemId, quantity, total);
+        logger.LogInformation("Shop sell CharacterId={CharacterId} NpcId={NpcId} ItemId={ItemId} Quantity={Quantity} Total={Total}", characterId, npcId, itemId, quantity, total);
         await SendTradeResultAsync(stream, Opcode.ShopSellResponse, true, "Sale complete.", ct);
     }
 
-    private static bool TryReadTrade(byte[] payload, out int itemId, out int quantity)
+    private bool CanUseShop(long characterId, int npcId)
     {
-        itemId = 0; quantity = 0;
-        if (payload.Length != 8) return false;
-        itemId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(0, 4));
-        quantity = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(4, 4));
+        if (!world.TryGetPlayer(characterId, out var player) || player is null || !npcs.TryGet(npcId, out var npc) || npc is null || !npc.Type.Equals("shop", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return npc.MapId == player.MapId && Math.Abs(npc.X - player.X) <= 1 && Math.Abs(npc.Y - player.Y) <= 1;
+    }
+
+    private static bool TryReadNpc(byte[] payload, out int npcId)
+    {
+        npcId = 0;
+        if (payload.Length != 4) return false;
+        npcId = BinaryPrimitives.ReadInt32LittleEndian(payload);
+        return true;
+    }
+
+    private static bool TryReadTrade(byte[] payload, out int npcId, out int itemId, out int quantity)
+    {
+        npcId = itemId = quantity = 0;
+        if (payload.Length != 12) return false;
+        npcId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(0, 4));
+        itemId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(4, 4));
+        quantity = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(8, 4));
         return true;
     }
 
