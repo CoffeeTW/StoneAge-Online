@@ -8,6 +8,7 @@ public sealed class CompositePacketHandler(
     LoginPacketHandler loginHandler,
     CharacterPacketHandler characterHandler,
     WorldPacketHandler worldHandler,
+    NpcPacketHandler npcHandler,
     ILogger<CompositePacketHandler> logger) : IClientPacketHandler, IClientConnectionLifecycle
 {
     public Task HandleAsync(
@@ -23,6 +24,7 @@ public sealed class CompositePacketHandler(
             Opcode.CharacterCreateRequest or
             Opcode.CharacterSelectRequest => characterHandler.HandleAsync(session, packet, stream, cancellationToken),
             Opcode.EnterWorld or Opcode.MoveRequest => worldHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.NpcListRequest or Opcode.NpcInteractRequest => npcHandler.HandleAsync(session, packet, stream, cancellationToken),
             Opcode.Ping => stream.WriteAsync(PacketCodec.Encode(Opcode.Pong, packet.Payload), cancellationToken).AsTask(),
             _ => HandleUnknownAsync(session, packet)
         };

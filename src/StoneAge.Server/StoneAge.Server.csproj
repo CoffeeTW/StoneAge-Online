@@ -5,4 +5,11 @@
     <ProjectReference Include="../StoneAge.Infrastructure/StoneAge.Infrastructure.csproj" />
     <ProjectReference Include="../StoneAge.Shared/StoneAge.Shared.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../data/**/*">
+      <Link>data/%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

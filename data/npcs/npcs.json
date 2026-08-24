@@ -1,0 +1,40 @@
+[
+  {
+    "id": 10001,
+    "name": "Village Guide",
+    "mapId": 1000,
+    "x": 52,
+    "y": 50,
+    "direction": 6,
+    "type": "dialogue",
+    "dialogue": "Welcome to Test Village. The world is still under construction."
+  },
+  {
+    "id": 10002,
+    "name": "Stone Gate Keeper",
+    "mapId": 1000,
+    "x": 50,
+    "y": 46,
+    "direction": 4,
+    "type": "warp",
+    "dialogue": "I can send you to the training field.",
+    "warpMapId": 1001,
+    "warpX": 10,
+    "warpY": 10,
+    "warpDirection": 4
+  },
+  {
+    "id": 11001,
+    "name": "Training Field Guide",
+    "mapId": 1001,
+    "x": 11,
+    "y": 10,
+    "direction": 6,
+    "type": "warp",
+    "dialogue": "Return to Test Village?",
+    "warpMapId": 1000,
+    "warpX": 50,
+    "warpY": 47,
+    "warpDirection": 4
+  }
+]

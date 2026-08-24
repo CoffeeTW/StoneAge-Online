@@ -27,4 +27,13 @@ public sealed class PlayerRuntime
         Direction = direction;
         LastMoveAt = DateTimeOffset.UtcNow;
     }
+
+    public void TeleportTo(int mapId, short x, short y, byte direction)
+    {
+        MapId = mapId;
+        X = x;
+        Y = y;
+        Direction = direction;
+        LastMoveAt = DateTimeOffset.UtcNow;
+    }
 }
