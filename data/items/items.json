@@ -1,0 +1,5 @@
+[
+  { "id": 20001, "name": "Small Herb", "buyPrice": 50, "sellPrice": 20, "maxStack": 99 },
+  { "id": 20002, "name": "Wooden Club", "buyPrice": 250, "sellPrice": 100, "maxStack": 1 },
+  { "id": 20003, "name": "Stone Fruit", "buyPrice": 80, "sellPrice": 30, "maxStack": 99 }
+]
