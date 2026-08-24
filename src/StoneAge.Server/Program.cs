@@ -24,6 +24,7 @@ builder.Services.AddSingleton<WorldPacketHandler>();
 builder.Services.AddSingleton<IClientPacketHandler, CompositePacketHandler>();
 builder.Services.AddSingleton<TcpGameServer>();
 builder.Services.AddHostedService<GameServerWorker>();
+builder.Services.AddHostedService<WorldAutosaveWorker>();
 
 var host = builder.Build();
 
