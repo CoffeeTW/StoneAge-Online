@@ -99,11 +99,15 @@ public sealed class WorldManager
         if (!_maps.TryGetValue(oldMapId, out var oldMap))
             return false;
 
+        var oldX = player.X;
+        var oldY = player.Y;
+        var oldDirection = player.Direction;
+
         oldMap.Players.TryRemove(characterId, out _);
         player.TeleportTo(targetMapId, targetX, targetY, direction);
         if (!targetMap.Players.TryAdd(characterId, player))
         {
-            player.TeleportTo(oldMapId, player.X, player.Y, player.Direction);
+            player.TeleportTo(oldMapId, oldX, oldY, oldDirection);
             oldMap.Players.TryAdd(characterId, player);
             return false;
         }
