@@ -17,6 +17,7 @@ public sealed class WorldManager
                 testVillage.Block(x, 45);
         }
         _maps[1000] = testVillage;
+        _maps[1001] = new GameMap(1001, "Training Field", 50, 50);
     }
 
     public string Name => "StoneAge Development World";
@@ -82,6 +83,31 @@ public sealed class WorldManager
             return false;
 
         player.MoveTo(targetX, targetY, direction);
+        return true;
+    }
+
+    public bool TryTeleport(long characterId, int targetMapId, short targetX, short targetY, byte direction, out int oldMapId)
+    {
+        oldMapId = 0;
+        if (!_players.TryGetValue(characterId, out var player) || direction > 7)
+            return false;
+
+        if (!_maps.TryGetValue(targetMapId, out var targetMap) || !targetMap.IsWalkable(targetX, targetY))
+            return false;
+
+        oldMapId = player.MapId;
+        if (!_maps.TryGetValue(oldMapId, out var oldMap))
+            return false;
+
+        oldMap.Players.TryRemove(characterId, out _);
+        player.TeleportTo(targetMapId, targetX, targetY, direction);
+        if (!targetMap.Players.TryAdd(characterId, player))
+        {
+            player.TeleportTo(oldMapId, player.X, player.Y, player.Direction);
+            oldMap.Players.TryAdd(characterId, player);
+            return false;
+        }
+
         return true;
     }
 
