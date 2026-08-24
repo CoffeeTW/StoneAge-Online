@@ -19,5 +19,10 @@ public enum Opcode : ushort
     MoveRequest = 0x0401,
     MoveBroadcast = 0x0402,
     Ping = 0x0501,
-    Pong = 0x0502
+    Pong = 0x0502,
+    NpcListRequest = 0x0601,
+    NpcListResponse = 0x0602,
+    NpcInteractRequest = 0x0603,
+    NpcDialogueResponse = 0x0604,
+    NpcWarpResponse = 0x0605
 }
