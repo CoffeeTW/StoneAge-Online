@@ -15,7 +15,9 @@ builder.Services.AddDbContextFactory<GameDbContext>(options =>
     options.UseNpgsql(connectionString));
 
 builder.Services.AddSingleton<Pbkdf2PasswordHasher>();
-builder.Services.AddSingleton<IClientPacketHandler, LoginPacketHandler>();
+builder.Services.AddSingleton<LoginPacketHandler>();
+builder.Services.AddSingleton<CharacterPacketHandler>();
+builder.Services.AddSingleton<IClientPacketHandler, CompositePacketHandler>();
 builder.Services.AddSingleton<TcpGameServer>();
 builder.Services.AddHostedService<GameServerWorker>();
 
