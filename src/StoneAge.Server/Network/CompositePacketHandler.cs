@@ -7,7 +7,8 @@ namespace StoneAge.Server.Network;
 public sealed class CompositePacketHandler(
     LoginPacketHandler loginHandler,
     CharacterPacketHandler characterHandler,
-    ILogger<CompositePacketHandler> logger) : IClientPacketHandler
+    WorldPacketHandler worldHandler,
+    ILogger<CompositePacketHandler> logger) : IClientPacketHandler, IClientConnectionLifecycle
 {
     public Task HandleAsync(
         GameSession session,
@@ -21,9 +22,13 @@ public sealed class CompositePacketHandler(
             Opcode.CharacterListRequest or
             Opcode.CharacterCreateRequest or
             Opcode.CharacterSelectRequest => characterHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.EnterWorld or Opcode.MoveRequest => worldHandler.HandleAsync(session, packet, stream, cancellationToken),
             _ => HandleUnknownAsync(session, packet)
         };
     }
+
+    public Task OnDisconnectedAsync(GameSession session, CancellationToken cancellationToken)
+        => worldHandler.DisconnectAsync(session);
 
     private Task HandleUnknownAsync(GameSession session, PacketFrame packet)
     {
