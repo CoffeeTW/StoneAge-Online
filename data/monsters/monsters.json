@@ -1,0 +1,4 @@
+[
+  { "id": 30001, "name": "Young Boar", "level": 1, "maxHp": 35, "attack": 6, "defense": 3, "agility": 4, "expReward": 18, "maps": [1000] },
+  { "id": 30002, "name": "Green Lizard", "level": 2, "maxHp": 45, "attack": 8, "defense": 4, "agility": 6, "expReward": 28, "maps": [1001] }
+]

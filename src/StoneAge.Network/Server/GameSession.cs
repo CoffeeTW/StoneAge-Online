@@ -5,7 +5,8 @@ public enum SessionState : byte
     Connected = 0,
     Authenticated = 1,
     CharacterSelected = 2,
-    InWorld = 3
+    InWorld = 3,
+    InBattle = 4
 }
 
 public sealed class GameSession
@@ -24,7 +25,6 @@ public sealed class GameSession
     {
         if (State != SessionState.Connected)
             return false;
-
         AccountId = accountId;
         State = SessionState.Authenticated;
         Touch();
@@ -35,7 +35,6 @@ public sealed class GameSession
     {
         if (State != SessionState.Authenticated)
             return false;
-
         CharacterId = characterId;
         State = SessionState.CharacterSelected;
         Touch();
@@ -46,7 +45,24 @@ public sealed class GameSession
     {
         if (State != SessionState.CharacterSelected || CharacterId is null)
             return false;
+        State = SessionState.InWorld;
+        Touch();
+        return true;
+    }
 
+    public bool EnterBattle()
+    {
+        if (State != SessionState.InWorld || CharacterId is null)
+            return false;
+        State = SessionState.InBattle;
+        Touch();
+        return true;
+    }
+
+    public bool LeaveBattle()
+    {
+        if (State != SessionState.InBattle)
+            return false;
         State = SessionState.InWorld;
         Touch();
         return true;

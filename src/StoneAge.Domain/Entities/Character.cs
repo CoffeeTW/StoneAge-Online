@@ -19,6 +19,7 @@ public sealed class Character
     public byte Water { get; set; } = 25;
     public byte Fire { get; set; } = 25;
     public byte Wind { get; set; } = 25;
+    public int Stone { get; set; } = 1000;
     public int MapId { get; set; } = 1000;
     public short X { get; set; } = 50;
     public short Y { get; set; } = 50;
@@ -26,4 +27,5 @@ public sealed class Character
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     public Account? Account { get; set; }
+    public List<CharacterItem> Inventory { get; set; } = [];
 }
