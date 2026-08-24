@@ -7,6 +7,7 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
 {
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<Character> Characters => Set<Character>();
+    public DbSet<CharacterItem> CharacterItems => Set<CharacterItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -29,6 +30,18 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
             entity.HasOne(x => x.Account)
                 .WithMany(x => x.Characters)
                 .HasForeignKey(x => x.AccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CharacterItem>(entity =>
+        {
+            entity.ToTable("character_items");
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => new { x.CharacterId, x.ItemId }).IsUnique();
+            entity.Property(x => x.Quantity).IsRequired();
+            entity.HasOne(x => x.Character)
+                .WithMany(x => x.Inventory)
+                .HasForeignKey(x => x.CharacterId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

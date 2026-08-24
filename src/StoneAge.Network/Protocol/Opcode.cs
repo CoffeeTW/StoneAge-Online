@@ -24,5 +24,13 @@ public enum Opcode : ushort
     NpcListResponse = 0x0602,
     NpcInteractRequest = 0x0603,
     NpcDialogueResponse = 0x0604,
-    NpcWarpResponse = 0x0605
+    NpcWarpResponse = 0x0605,
+    InventoryListRequest = 0x0701,
+    InventoryListResponse = 0x0702,
+    ShopListRequest = 0x0710,
+    ShopListResponse = 0x0711,
+    ShopBuyRequest = 0x0712,
+    ShopBuyResponse = 0x0713,
+    ShopSellRequest = 0x0714,
+    ShopSellResponse = 0x0715
 }

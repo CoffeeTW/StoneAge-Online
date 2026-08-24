@@ -24,6 +24,16 @@
     "warpDirection": 4
   },
   {
+    "id": 10003,
+    "name": "Village Item Merchant",
+    "mapId": 1000,
+    "x": 48,
+    "y": 50,
+    "direction": 2,
+    "type": "shop",
+    "dialogue": "Take a look at my supplies."
+  },
+  {
     "id": 11001,
     "name": "Training Field Guide",
     "mapId": 1001,
