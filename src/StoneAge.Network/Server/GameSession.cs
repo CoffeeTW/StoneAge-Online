@@ -12,6 +12,7 @@ public sealed class GameSession
 {
     public Guid SessionId { get; } = Guid.NewGuid();
     public long? AccountId { get; private set; }
+    public long? CharacterId { get; private set; }
     public SessionState State { get; private set; } = SessionState.Connected;
 
     public bool IsAuthenticated => State >= SessionState.Authenticated;
@@ -23,6 +24,16 @@ public sealed class GameSession
 
         AccountId = accountId;
         State = SessionState.Authenticated;
+        return true;
+    }
+
+    public bool SelectCharacter(long characterId)
+    {
+        if (State != SessionState.Authenticated)
+            return false;
+
+        CharacterId = characterId;
+        State = SessionState.CharacterSelected;
         return true;
     }
 }
