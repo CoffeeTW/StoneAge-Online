@@ -6,7 +6,7 @@ using StoneAge.Network.Protocol;
 const string host = "127.0.0.1";
 const int port = 7021;
 
-Console.WriteLine("StoneAge Online TestClient v0.1-03");
+Console.WriteLine("StoneAge Online TestClient v0.1-04");
 Console.WriteLine($"Connecting to {host}:{port} ...");
 
 using var client = new TcpClient();
@@ -34,7 +34,7 @@ if (!loginSuccess) return;
 await ShowCharactersAsync(stream);
 
 Console.WriteLine();
-Console.WriteLine("Commands: list | create <name> | select <id> | quit");
+Console.WriteLine("Commands: list | create <name> | select <id> | enter | move <x> <y> <dir> | quit");
 while (true)
 {
     Console.Write("> ");
@@ -65,6 +65,32 @@ while (true)
         BinaryPrimitives.WriteInt64LittleEndian(payload, characterId);
         await stream.WriteAsync(PacketCodec.Encode(Opcode.CharacterSelectRequest, payload));
         PrintResult(await ReadPacketAsync(stream));
+        continue;
+    }
+
+    if (input.Equals("enter", StringComparison.OrdinalIgnoreCase))
+    {
+        await stream.WriteAsync(PacketCodec.Encode(Opcode.EnterWorld, ReadOnlySpan<byte>.Empty));
+        PrintEnterWorld(await ReadPacketAsync(stream));
+        continue;
+    }
+
+    if (input.StartsWith("move ", StringComparison.OrdinalIgnoreCase))
+    {
+        var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 4 && short.TryParse(parts[1], out var x) && short.TryParse(parts[2], out var y) && byte.TryParse(parts[3], out var direction))
+        {
+            var payload = new byte[5];
+            BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(0, 2), x);
+            BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(2, 2), y);
+            payload[4] = direction;
+            await stream.WriteAsync(PacketCodec.Encode(Opcode.MoveRequest, payload));
+            PrintMove(await ReadPacketAsync(stream));
+        }
+        else
+        {
+            Console.WriteLine("Usage: move <x> <y> <dir>");
+        }
         continue;
     }
 
@@ -99,6 +125,36 @@ static void PrintResult(PacketFrame response)
     var messageLength = BinaryPrimitives.ReadUInt16LittleEndian(response.Payload.AsSpan(9, 2));
     var message = Encoding.UTF8.GetString(response.Payload, 11, messageLength);
     Console.WriteLine($"{(success ? "OK" : "FAIL")} Id={id} Message={message}");
+}
+
+static void PrintEnterWorld(PacketFrame response)
+{
+    var payload = response.Payload;
+    var success = payload[0] == 1;
+    var characterId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(1, 8));
+    var mapId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(9, 4));
+    var x = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(13, 2));
+    var y = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(15, 2));
+    var direction = payload[17];
+    var messageLength = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(18, 2));
+    var message = Encoding.UTF8.GetString(payload, 20, messageLength);
+    Console.WriteLine($"{(success ? "ENTERED" : "FAILED")} Character={characterId} Map={mapId} ({x},{y}) Dir={direction} Message={message}");
+}
+
+static void PrintMove(PacketFrame response)
+{
+    if (response.Opcode != Opcode.MoveBroadcast)
+    {
+        Console.WriteLine($"Unexpected packet: {response.Opcode}");
+        return;
+    }
+
+    var characterId = BinaryPrimitives.ReadInt64LittleEndian(response.Payload.AsSpan(0, 8));
+    var mapId = BinaryPrimitives.ReadInt32LittleEndian(response.Payload.AsSpan(8, 4));
+    var x = BinaryPrimitives.ReadInt16LittleEndian(response.Payload.AsSpan(12, 2));
+    var y = BinaryPrimitives.ReadInt16LittleEndian(response.Payload.AsSpan(14, 2));
+    var direction = response.Payload[16];
+    Console.WriteLine($"MOVE Character={characterId} Map={mapId} ({x},{y}) Dir={direction}");
 }
 
 static byte[] BuildLoginPayload(string username, string password)
