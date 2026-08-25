@@ -32,6 +32,7 @@ builder.Services.AddSingleton<WorldPacketHandler>();
 builder.Services.AddSingleton<NpcPacketHandler>();
 builder.Services.AddSingleton<InventoryShopPacketHandler>();
 builder.Services.AddSingleton<ItemEquipmentPacketHandler>();
+builder.Services.AddSingleton<PetPacketHandler>();
 builder.Services.AddSingleton<IClientPacketHandler, CompositePacketHandler>();
 builder.Services.AddSingleton<TcpGameServer>();
 builder.Services.AddHostedService<GameServerWorker>();
