@@ -25,6 +25,21 @@ public sealed class MonsterDefinition
     public int[] Maps { get; init; } = [];
 }
 
+public sealed record BattlePetSnapshot(
+    long Id,
+    string Name,
+    int Level,
+    int Hp,
+    int MaxHp,
+    int Attack,
+    int Defense,
+    int Agility,
+    int Loyalty,
+    byte Earth,
+    byte Water,
+    byte Fire,
+    byte Wind);
+
 public sealed class MonsterCatalog
 {
     private readonly Dictionary<int, MonsterDefinition> _monsters;
@@ -58,7 +73,8 @@ public sealed class BattleSession
         byte earth,
         byte water,
         byte fire,
-        byte wind)
+        byte wind,
+        BattlePetSnapshot? pet)
     {
         CharacterId = characterId;
         Monster = monster;
@@ -70,6 +86,8 @@ public sealed class BattleSession
         PlayerWater = water;
         PlayerFire = fire;
         PlayerWind = wind;
+        Pet = pet;
+        PetHp = pet?.Hp ?? 0;
         MonsterHp = monster.MaxHp;
     }
 
@@ -83,6 +101,8 @@ public sealed class BattleSession
     public byte PlayerWater { get; }
     public byte PlayerFire { get; }
     public byte PlayerWind { get; }
+    public BattlePetSnapshot? Pet { get; }
+    public int PetHp { get; set; }
     public int MonsterHp { get; set; }
     public int Turn { get; set; } = 1;
 }
@@ -106,6 +126,7 @@ public sealed class BattleManager(MonsterCatalog monsters)
         byte water,
         byte fire,
         byte wind,
+        BattlePetSnapshot? pet,
         int encounterPercent = 20)
     {
         if (_battles.ContainsKey(characterId) || Random.Shared.Next(100) >= encounterPercent)
@@ -131,7 +152,7 @@ public sealed class BattleManager(MonsterCatalog monsters)
         var monster = selected ?? candidates[^1];
         var battle = new BattleSession(
             characterId, monster, playerHp, playerAttack, playerDefense, playerAgility,
-            earth, water, fire, wind);
+            earth, water, fire, wind, pet);
         return _battles.TryAdd(characterId, battle) ? battle : null;
     }
 }
