@@ -22,4 +22,5 @@ public sealed class CharacterPet
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     public Character? Character { get; set; }
+    public List<CharacterPetSkill> Skills { get; set; } = [];
 }
