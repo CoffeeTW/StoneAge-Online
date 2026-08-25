@@ -38,7 +38,8 @@ public sealed record BattlePetSnapshot(
     byte Earth,
     byte Water,
     byte Fire,
-    byte Wind);
+    byte Wind,
+    int? PrimarySkillId);
 
 public sealed class MonsterCatalog
 {
