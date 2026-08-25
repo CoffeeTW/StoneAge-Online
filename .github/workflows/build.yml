@@ -1,0 +1,32 @@
+name: build
+
+on:
+  push:
+    branches:
+      - main
+      - 'develop/**'
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore server
+        run: dotnet restore src/StoneAge.Server/StoneAge.Server.csproj
+
+      - name: Build server
+        run: dotnet build src/StoneAge.Server/StoneAge.Server.csproj -c Release --no-restore
+
+      - name: Restore test client
+        run: dotnet restore tools/StoneAge.TestClient/StoneAge.TestClient.csproj
+
+      - name: Build test client
+        run: dotnet build tools/StoneAge.TestClient/StoneAge.TestClient.csproj -c Release --no-restore
