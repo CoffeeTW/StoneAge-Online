@@ -149,11 +149,14 @@ public sealed class SocialPacketHandler(
         var targetId = BinaryPrimitives.ReadInt64LittleEndian(payload);
         var result = parties.Kick(leaderId, targetId, out var remaining);
         await SendManageResultAsync(connection, Opcode.PartyKickResponse, result, targetId, result == PartyManageResult.Success ? "Member kicked." : result.ToString(), ct);
-        if (result != PartyManageResult.Success || remaining is null)
+        if (result != PartyManageResult.Success)
             return;
 
         await connections.SendAsync(targetId, BuildPartyCleared(), ct);
-        await BroadcastPartyStateAsync(remaining, ct);
+        if (remaining is not null)
+            await BroadcastPartyStateAsync(remaining, ct);
+        else
+            await connection.SendEncodedAsync(BuildPartyCleared(), ct);
     }
 
     private async Task TransferLeaderAsync(ClientConnection connection, byte[] payload, CancellationToken ct)
