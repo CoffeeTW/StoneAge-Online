@@ -1,12 +1,9 @@
 using Microsoft.EntityFrameworkCore;
-using StoneAge.Infrastructure.Persistence.Migrations;
 
 namespace StoneAge.Infrastructure.Persistence;
 
 public static class MigrationBootstrap
 {
-    private const string ProductVersion = "10.0.11";
-
     public static async Task ApplyAsync(GameDbContext db, CancellationToken cancellationToken = default)
     {
         // Transitional bridge for installations created before EF migrations.
@@ -24,7 +21,7 @@ public static class MigrationBootstrap
             );
 
             INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
-            VALUES ('20260826000000_LegacyV0121Baseline', '10.0.11')
+            VALUES ('20260826000000_LegacyV0121Baseline', '10.0.4')
             ON CONFLICT ("MigrationId") DO NOTHING;
             """, cancellationToken);
 
