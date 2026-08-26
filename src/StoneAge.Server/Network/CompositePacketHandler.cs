@@ -12,6 +12,8 @@ public sealed class CompositePacketHandler(
     InventoryShopPacketHandler inventoryShopHandler,
     ItemEquipmentPacketHandler itemEquipmentHandler,
     BattlePacketHandler battleHandler,
+    PetPacketHandler petHandler,
+    PetSkillPacketHandler petSkillHandler,
     ILogger<CompositePacketHandler> logger) : IClientPacketHandler, IClientConnectionLifecycle
 {
     public Task HandleAsync(
@@ -36,8 +38,16 @@ public sealed class CompositePacketHandler(
             Opcode.EquipmentListRequest or
             Opcode.ItemEquipRequest or
             Opcode.ItemUnequipRequest => itemEquipmentHandler.HandleAsync(session, packet, stream, cancellationToken),
-            Opcode.BattleActionRequest => battleHandler.HandleAsync(session, packet, stream, cancellationToken),
-            Opcode.Ping => stream.WriteAsync(PacketCodec.Encode(Opcode.Pong, packet.Payload), cancellationToken).AsTask(),
+            Opcode.BattleActionRequest or
+            Opcode.BattlePetSkillSelectRequest => battleHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.PetListRequest or
+            Opcode.PetActivateRequest or
+            Opcode.PetRenameRequest or
+            Opcode.PetReleaseRequest => petHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.PetSkillListRequest or
+            Opcode.PetSkillLearnRequest or
+            Opcode.PetSkillForgetRequest => petSkillHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.Ping => ConnectionSendGate.SendPacketAsync(stream, Opcode.Pong, packet.Payload, cancellationToken),
             _ => HandleUnknownAsync(session, packet)
         };
     }

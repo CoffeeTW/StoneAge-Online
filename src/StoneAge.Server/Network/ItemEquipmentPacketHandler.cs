@@ -157,7 +157,7 @@ public sealed class ItemEquipmentPacketHandler(
         writer.Write(character.Strength + attackBonus);
         writer.Write(character.Vitality + defenseBonus);
         writer.Write(character.Agility + agilityBonus);
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.EquipmentListResponse, ms.ToArray()), ct);
+        await ConnectionSendGate.SendPacketAsync(stream, Opcode.EquipmentListResponse, ms.ToArray(), ct);
     }
 
     private static bool TryReadInventoryId(byte[] payload, out long inventoryId)
@@ -168,7 +168,7 @@ public sealed class ItemEquipmentPacketHandler(
         return inventoryId > 0;
     }
 
-    private static async Task SendUseResultAsync(NetworkStream stream, bool success, int hp, int mp, string message, CancellationToken ct)
+    private static Task SendUseResultAsync(NetworkStream stream, bool success, int hp, int mp, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 4 + 4 + 2 + messageBytes.Length];
@@ -177,16 +177,16 @@ public sealed class ItemEquipmentPacketHandler(
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(5, 4), mp);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(9, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(11));
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.ItemUseResponse, payload), ct);
+        return ConnectionSendGate.SendPacketAsync(stream, Opcode.ItemUseResponse, payload, ct);
     }
 
-    private static async Task SendResultAsync(NetworkStream stream, Opcode opcode, bool success, string message, CancellationToken ct)
+    private static Task SendResultAsync(NetworkStream stream, Opcode opcode, bool success, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 2 + messageBytes.Length];
         payload[0] = success ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(1, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(3));
-        await stream.WriteAsync(PacketCodec.Encode(opcode, payload), ct);
+        return ConnectionSendGate.SendPacketAsync(stream, opcode, payload, ct);
     }
 }

@@ -75,7 +75,7 @@ public sealed class LoginPacketHandler(
         return true;
     }
 
-    private static async Task SendLoginResponseAsync(
+    private static Task SendLoginResponseAsync(
         NetworkStream stream,
         bool success,
         long accountId,
@@ -89,6 +89,6 @@ public sealed class LoginPacketHandler(
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(9, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(11));
 
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.LoginResponse, payload), cancellationToken);
+        return ConnectionSendGate.SendPacketAsync(stream, Opcode.LoginResponse, payload, cancellationToken);
     }
 }

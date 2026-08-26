@@ -52,7 +52,7 @@ public sealed class CharacterPacketHandler(
             writer.Write(character.Y);
         }
 
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.CharacterListResponse, ms.ToArray()), cancellationToken);
+        await ConnectionSendGate.SendPacketAsync(stream, Opcode.CharacterListResponse, ms.ToArray(), cancellationToken);
     }
 
     private async Task CreateCharacterAsync(GameSession session, byte[] payload, NetworkStream stream, CancellationToken cancellationToken)
@@ -148,13 +148,13 @@ public sealed class CharacterPacketHandler(
         return true;
     }
 
-    private static async Task SendCreateResponseAsync(NetworkStream stream, bool success, long characterId, string message, CancellationToken cancellationToken)
-        => await SendResultAsync(stream, Opcode.CharacterCreateResponse, success, characterId, message, cancellationToken);
+    private static Task SendCreateResponseAsync(NetworkStream stream, bool success, long characterId, string message, CancellationToken cancellationToken)
+        => SendResultAsync(stream, Opcode.CharacterCreateResponse, success, characterId, message, cancellationToken);
 
-    private static async Task SendSelectResponseAsync(NetworkStream stream, bool success, long characterId, string message, CancellationToken cancellationToken)
-        => await SendResultAsync(stream, Opcode.CharacterSelectResponse, success, characterId, message, cancellationToken);
+    private static Task SendSelectResponseAsync(NetworkStream stream, bool success, long characterId, string message, CancellationToken cancellationToken)
+        => SendResultAsync(stream, Opcode.CharacterSelectResponse, success, characterId, message, cancellationToken);
 
-    private static async Task SendResultAsync(NetworkStream stream, Opcode opcode, bool success, long characterId, string message, CancellationToken cancellationToken)
+    private static Task SendResultAsync(NetworkStream stream, Opcode opcode, bool success, long characterId, string message, CancellationToken cancellationToken)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 8 + 2 + messageBytes.Length];
@@ -162,7 +162,7 @@ public sealed class CharacterPacketHandler(
         BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(1, 8), characterId);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(9, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(11));
-        await stream.WriteAsync(PacketCodec.Encode(opcode, payload), cancellationToken);
+        return ConnectionSendGate.SendPacketAsync(stream, opcode, payload, cancellationToken);
     }
 
     private static Task SendErrorForAsync(Opcode request, NetworkStream stream, string message, CancellationToken cancellationToken)
@@ -170,7 +170,7 @@ public sealed class CharacterPacketHandler(
         {
             Opcode.CharacterCreateRequest => SendCreateResponseAsync(stream, false, 0, message, cancellationToken),
             Opcode.CharacterSelectRequest => SendSelectResponseAsync(stream, false, 0, message, cancellationToken),
-            Opcode.CharacterListRequest => stream.WriteAsync(PacketCodec.Encode(Opcode.CharacterListResponse, new byte[] { 0 }), cancellationToken).AsTask(),
+            Opcode.CharacterListRequest => ConnectionSendGate.SendPacketAsync(stream, Opcode.CharacterListResponse, new byte[] { 0 }, cancellationToken),
             _ => Task.CompletedTask
         };
 

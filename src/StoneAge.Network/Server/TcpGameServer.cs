@@ -42,8 +42,8 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
         try
         {
             await using var stream = client.GetStream();
-            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-09");
-            await stream.WriteAsync(PacketCodec.Encode(Opcode.Hello, helloPayload), cancellationToken);
+            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-13");
+            await ConnectionSendGate.SendAsync(stream, PacketCodec.Encode(Opcode.Hello, helloPayload), cancellationToken);
 
             while (!cancellationToken.IsCancellationRequested)
             {

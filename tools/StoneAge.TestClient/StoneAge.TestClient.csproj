@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/StoneAge.Network/StoneAge.Network.csproj" />
   </ItemGroup>
