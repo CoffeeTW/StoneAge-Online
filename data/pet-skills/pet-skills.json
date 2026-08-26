@@ -1,5 +1,6 @@
 [
-  { "id": 40001, "name": "Bite", "powerPercent": 110, "element": "natural" },
-  { "id": 40002, "name": "Guard Rush", "powerPercent": 125, "element": "earth" },
-  { "id": 40003, "name": "Aqua Fang", "powerPercent": 125, "element": "water" }
+  { "id": 40001, "name": "Bite", "powerPercent": 110, "element": "natural", "effect": "damage" },
+  { "id": 40002, "name": "Guard Rush", "powerPercent": 125, "element": "earth", "effect": "damage" },
+  { "id": 40003, "name": "Aqua Fang", "powerPercent": 125, "element": "water", "effect": "damage" },
+  { "id": 40004, "name": "Recovering Lick", "powerPercent": 100, "element": "natural", "effect": "heal_self", "effectPower": 25 }
 ]
