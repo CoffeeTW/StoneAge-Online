@@ -18,7 +18,7 @@ public sealed class PartyBattlePacketHandler(
     WorldConnectionRegistry connections,
     ILogger<PartyBattlePacketHandler> logger) : IClientPacketHandler
 {
-    private const int InventoryCapacity = 20;
+    private const short InventoryCapacity = 20;
     private const int MaxPetsPerCharacter = 5;
 
     public bool IsInBattle(long characterId)
@@ -364,22 +364,15 @@ public sealed class PartyBattlePacketHandler(
         if (!items.TryGet(itemId, out var item) || item is null)
             return false;
 
-        var existing = await db.CharacterItems.SingleOrDefaultAsync(x => x.CharacterId == characterId && x.ItemId == itemId, ct);
-        if (existing is not null)
-        {
-            if (existing.Quantity >= item.MaxStack)
-                return false;
-            existing.Quantity++;
-            existing.UpdatedAt = DateTimeOffset.UtcNow;
-            return true;
-        }
-
-        var usedSlots = await db.CharacterItems.Where(x => x.CharacterId == characterId).Select(x => x.Slot).ToListAsync(ct);
-        if (usedSlots.Count >= InventoryCapacity)
+        var rows = await db.CharacterItems
+            .Where(x => x.CharacterId == characterId)
+            .OrderBy(x => x.Slot)
+            .ToListAsync(ct);
+        if (!InventoryStackService.TryAdd(characterId, itemId, 1, item.MaxStack, InventoryCapacity, rows))
             return false;
-        short slot = 0;
-        while (usedSlots.Contains(slot)) slot++;
-        db.CharacterItems.Add(new CharacterItem { CharacterId = characterId, ItemId = itemId, Quantity = 1, Slot = slot });
+
+        foreach (var row in rows.Where(x => x.Id == 0))
+            db.CharacterItems.Add(row);
         return true;
     }
 
