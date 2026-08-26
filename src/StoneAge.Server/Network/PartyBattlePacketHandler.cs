@@ -19,6 +19,7 @@ public sealed class PartyBattlePacketHandler(
     ILogger<PartyBattlePacketHandler> logger) : IClientPacketHandler
 {
     private const int InventoryCapacity = 20;
+    private const int MaxPetsPerCharacter = 5;
 
     public bool IsInBattle(long characterId)
         => battles.TryGet(characterId, out _);
@@ -128,19 +129,58 @@ public sealed class PartyBattlePacketHandler(
             connection.Session.State != SessionState.InBattle || connection.Session.CharacterId is not long characterId)
             return;
 
-        if (packet.Payload.Length != 1 || packet.Payload[0] is < 1 or > 2 || !battles.TryGet(characterId, out var battle) || battle is null)
+        if (packet.Payload.Length != 1 || packet.Payload[0] is < 1 or > 4 || !battles.TryGet(characterId, out var battle) || battle is null)
         {
             await SendActionResponseAsync(connection, false, "Invalid party battle action.", ct);
             return;
         }
 
-        if (!battle.TrySubmitAction(characterId, packet.Payload[0], out var resolution))
+        var action = packet.Payload[0];
+        string? specialFailureMessage = null;
+        if (action is 3 or 4)
+        {
+            var leader = battle.Participants.First(x => x.IsLeader);
+            if (leader.CharacterId != characterId)
+            {
+                await SendActionResponseAsync(connection, false, "Only the party leader may escape or capture.", ct);
+                return;
+            }
+            if (!battle.CanSubmitAction(characterId))
+            {
+                await SendActionResponseAsync(connection, false, "Action already submitted or actor cannot act.", ct);
+                return;
+            }
+
+            if (action == 3 && TryEscape(battle, leader))
+            {
+                await SendActionResponseAsync(connection, true, "Party escaped.", ct);
+                await PersistEndStateAsync(battle, 0, ct);
+                await FinishBattleAsync(battle, 3, 0, 0, 0, "Party escaped.", ct);
+                return;
+            }
+
+            if (action == 4 && await TryCaptureAsync(battle, leader.CharacterId, ct))
+            {
+                await SendActionResponseAsync(connection, true, "Monster captured by party leader.", ct);
+                await PersistEndStateAsync(battle, 0, ct);
+                await FinishBattleAsync(battle, 4, 0, 0, leader.CharacterId, "Monster captured by party leader.", ct);
+                return;
+            }
+
+            specialFailureMessage = action == 3
+                ? "Escape failed; defending this turn."
+                : "Capture failed; defending this turn.";
+            action = 2;
+        }
+
+        if (!battle.TrySubmitAction(characterId, action, out var resolution))
         {
             await SendActionResponseAsync(connection, false, "Action already submitted or actor cannot act.", ct);
             return;
         }
 
-        await SendActionResponseAsync(connection, true, resolution is null ? "Action submitted; waiting for party." : "Action submitted.", ct);
+        await SendActionResponseAsync(connection, true,
+            specialFailureMessage ?? (resolution is null ? "Action submitted; waiting for party." : "Action submitted."), ct);
         if (resolution is null)
             return;
 
@@ -155,21 +195,14 @@ public sealed class PartyBattlePacketHandler(
         var reward = resolution.Victory
             ? await PersistVictoryStateAsync(battle, expEach, ct)
             : await PersistEndStateAsync(battle, 0, ct);
-        var endPacket = BuildEndPacket(
+        await FinishBattleAsync(
+            battle,
             resolution.Victory ? (byte)1 : (byte)0,
             expEach,
-            battle.Monster.Id,
             reward.ItemId,
             reward.OwnerCharacterId,
-            resolution.Victory ? "Party victory." : "Party defeat.");
-
-        foreach (var participant in battle.Participants)
-        {
-            if (connections.TryGetConnection(participant.CharacterId, out var peer) && peer is not null)
-                peer.Session.LeaveBattle();
-            await connections.SendAsync(participant.CharacterId, endPacket, ct);
-        }
-        battles.End(battle);
+            resolution.Victory ? "Party victory." : "Party defeat.",
+            ct);
     }
 
     public async Task DisconnectAsync(long characterId, CancellationToken ct)
@@ -186,6 +219,58 @@ public sealed class PartyBattlePacketHandler(
                 peer.Session.LeaveBattle();
             await connections.SendAsync(participant.CharacterId, endPacket, ct);
         }
+    }
+
+    private async Task FinishBattleAsync(PartyBattleSession battle, byte result, int expEach, int rewardItemId, long rewardOwnerId, string message, CancellationToken ct)
+    {
+        var endPacket = BuildEndPacket(result, expEach, battle.Monster.Id, rewardItemId, rewardOwnerId, message);
+        foreach (var participant in battle.Participants)
+        {
+            if (connections.TryGetConnection(participant.CharacterId, out var peer) && peer is not null)
+                peer.Session.LeaveBattle();
+            await connections.SendAsync(participant.CharacterId, endPacket, ct);
+        }
+        battles.End(battle);
+    }
+
+    private static bool TryEscape(PartyBattleSession battle, PartyBattleParticipant leader)
+        => Random.Shared.Next(100) < 55 + Math.Clamp(leader.Agility - battle.Monster.Agility, -20, 20);
+
+    private async Task<bool> TryCaptureAsync(PartyBattleSession battle, long leaderCharacterId, CancellationToken ct)
+    {
+        if (!battle.Monster.CaptureEnabled || battle.MonsterHp <= 0)
+            return false;
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        if (await db.CharacterPets.CountAsync(x => x.CharacterId == leaderCharacterId, ct) >= MaxPetsPerCharacter)
+            return false;
+
+        var missingHpPercent = 100 - (battle.MonsterHp * 100 / battle.Monster.MaxHp);
+        var chance = Math.Clamp(battle.Monster.CaptureRate + missingHpPercent / 2, 1, 95);
+        if (Random.Shared.Next(100) >= chance)
+            return false;
+
+        var monster = battle.Monster;
+        db.CharacterPets.Add(new CharacterPet
+        {
+            CharacterId = leaderCharacterId,
+            MonsterId = monster.Id,
+            Name = monster.Name,
+            Level = monster.Level,
+            Hp = monster.MaxHp,
+            MaxHp = monster.MaxHp,
+            Attack = monster.Attack,
+            Defense = monster.Defense,
+            Agility = monster.Agility,
+            Loyalty = 50,
+            Earth = monster.Earth,
+            Water = monster.Water,
+            Fire = monster.Fire,
+            Wind = monster.Wind,
+            Skills = [new CharacterPetSkill { Slot = 0, SkillId = 40001 }]
+        });
+        await db.SaveChangesAsync(ct);
+        return true;
     }
 
     private async Task<(int ItemId, long OwnerCharacterId)> PersistVictoryStateAsync(PartyBattleSession battle, int expEach, CancellationToken ct)
