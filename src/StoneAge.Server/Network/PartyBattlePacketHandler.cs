@@ -15,6 +15,9 @@ public sealed class PartyBattlePacketHandler(
     WorldConnectionRegistry connections,
     ILogger<PartyBattlePacketHandler> logger) : IClientPacketHandler
 {
+    public bool IsInBattle(long characterId)
+        => battles.TryGet(characterId, out _);
+
     public async Task<bool> TryStartEncounterAsync(int mapId, IReadOnlyList<long> participantIds, CancellationToken ct)
     {
         if (participantIds.Count < 2)
@@ -91,7 +94,8 @@ public sealed class PartyBattlePacketHandler(
 
     public async Task HandleAsync(ClientConnection connection, PacketFrame packet, CancellationToken ct)
     {
-        if (packet.Opcode != Opcode.PartyBattleActionRequest || connection.Session.State != SessionState.InBattle || connection.Session.CharacterId is not long characterId)
+        if (packet.Opcode is not (Opcode.PartyBattleActionRequest or Opcode.BattleActionRequest) ||
+            connection.Session.State != SessionState.InBattle || connection.Session.CharacterId is not long characterId)
             return;
 
         if (packet.Payload.Length != 1 || packet.Payload[0] is < 1 or > 2 || !battles.TryGet(characterId, out var battle) || battle is null)
@@ -118,7 +122,7 @@ public sealed class PartyBattlePacketHandler(
             return;
 
         var expEach = resolution.Victory ? Math.Max(1, battle.Monster.ExpReward / battle.Participants.Count) : 0;
-        await PersistEndStateAsync(battle, expEach, resolution.Defeat, ct);
+        await PersistEndStateAsync(battle, expEach, ct);
         var endPacket = BuildEndPacket(resolution.Victory ? (byte)1 : (byte)0, expEach, battle.Monster.Id,
             resolution.Victory ? "Party victory." : "Party defeat.");
 
@@ -136,7 +140,7 @@ public sealed class PartyBattlePacketHandler(
         if (!battles.TryGet(characterId, out var battle) || battle is null)
             return;
 
-        await PersistEndStateAsync(battle, 0, false, ct);
+        await PersistEndStateAsync(battle, 0, ct);
         battles.End(battle);
         var endPacket = BuildEndPacket(2, 0, battle.Monster.Id, "Party battle aborted because a member disconnected.");
         foreach (var participant in battle.Participants.Where(x => x.CharacterId != characterId))
@@ -147,7 +151,7 @@ public sealed class PartyBattlePacketHandler(
         }
     }
 
-    private async Task PersistEndStateAsync(PartyBattleSession battle, int expEach, bool defeat, CancellationToken ct)
+    private async Task PersistEndStateAsync(PartyBattleSession battle, int expEach, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var ids = battle.Participants.Select(x => x.CharacterId).ToArray();
