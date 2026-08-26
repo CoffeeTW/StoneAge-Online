@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Net.Sockets;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using StoneAge.Domain.Entities;
@@ -24,8 +23,9 @@ public sealed class BattlePacketHandler(
 
     private enum Actor : byte { Player, Pet, Monster }
 
-    public async Task<bool> TryStartEncounterAsync(GameSession session, NetworkStream stream, int mapId, CancellationToken ct)
+    public async Task<bool> TryStartEncounterAsync(ClientConnection connection, int mapId, CancellationToken ct)
     {
+        var session = connection.Session;
         if (session.State != SessionState.InWorld || session.CharacterId is null)
             return false;
 
@@ -68,20 +68,21 @@ public sealed class BattlePacketHandler(
             return false;
         }
 
-        await SendBattleStartAsync(stream, battle, ct);
+        await SendBattleStartAsync(connection, battle, ct);
         logger.LogInformation("Battle started CharacterId={CharacterId} MonsterId={MonsterId} PetId={PetId}", characterId, battle.Monster.Id, battle.Pet?.Id);
         return true;
     }
 
-    public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken ct)
+    public Task HandleAsync(ClientConnection connection, PacketFrame packet, CancellationToken ct)
     {
+        var session = connection.Session;
         if (session.State != SessionState.InBattle || session.CharacterId is null)
             return Task.CompletedTask;
 
         return packet.Opcode switch
         {
-            Opcode.BattleActionRequest => ResolveTurnAsync(session, packet.Payload, stream, ct),
-            Opcode.BattlePetSkillSelectRequest => SelectPetSkillAsync(session.CharacterId.Value, packet.Payload, stream, ct),
+            Opcode.BattleActionRequest => ResolveTurnAsync(connection, packet.Payload, ct),
+            Opcode.BattlePetSkillSelectRequest => SelectPetSkillAsync(connection, packet.Payload, ct),
             _ => Task.CompletedTask
         };
     }
@@ -92,13 +93,14 @@ public sealed class BattlePacketHandler(
             battles.End(id);
     }
 
-    private async Task SelectPetSkillAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task SelectPetSkillAsync(ClientConnection connection, byte[] payload, CancellationToken ct)
     {
+        var characterId = connection.Session.CharacterId!.Value;
         if (payload.Length != 1 || payload[0] > 3 ||
             !battles.TryGet(characterId, out var battle) || battle is null ||
             battle.Pet is null || battle.PetHp <= 0)
         {
-            await SendPetSkillSelectResponseAsync(stream, false, 0, 0, "Pet skill cannot be selected.", ct);
+            await SendPetSkillSelectResponseAsync(connection, false, 0, 0, "Pet skill cannot be selected.", ct);
             return;
         }
 
@@ -108,17 +110,18 @@ public sealed class BattlePacketHandler(
             .SingleOrDefaultAsync(x => x.CharacterPetId == battle.Pet.Id && x.Slot == slot, ct);
         if (row is null || !petSkills.TryGet(row.SkillId, out var skill) || skill is null)
         {
-            await SendPetSkillSelectResponseAsync(stream, false, slot, 0, "Pet skill slot is empty or invalid.", ct);
+            await SendPetSkillSelectResponseAsync(connection, false, slot, 0, "Pet skill slot is empty or invalid.", ct);
             return;
         }
 
         battle.SelectedPetSkillId = row.SkillId;
         logger.LogDebug("Battle pet skill selected CharacterId={CharacterId} PetId={PetId} Slot={Slot} SkillId={SkillId}", characterId, battle.Pet.Id, slot, row.SkillId);
-        await SendPetSkillSelectResponseAsync(stream, true, slot, row.SkillId, "Pet skill selected.", ct);
+        await SendPetSkillSelectResponseAsync(connection, true, slot, row.SkillId, "Pet skill selected.", ct);
     }
 
-    private async Task ResolveTurnAsync(GameSession session, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task ResolveTurnAsync(ClientConnection connection, byte[] payload, CancellationToken ct)
     {
+        var session = connection.Session;
         if (payload.Length != 1 || payload[0] is < 1 or > 4 || session.CharacterId is null)
             return;
 
@@ -132,7 +135,7 @@ public sealed class BattlePacketHandler(
             await PersistBattleHpAsync(characterId, battle, ct);
             battles.End(characterId);
             session.LeaveBattle();
-            await SendBattleEndAsync(stream, 2, 0, 0, 0, 0, 0, 0, "Escaped.", ct);
+            await SendBattleEndAsync(connection, 2, 0, 0, 0, 0, 0, 0, "Escaped.", ct);
             return;
         }
 
@@ -140,7 +143,7 @@ public sealed class BattlePacketHandler(
         {
             battles.End(characterId);
             session.LeaveBattle();
-            await SendBattleEndAsync(stream, 3, 0, 0, 0, 0, battle.Monster.Id, 0, "Captured.", ct);
+            await SendBattleEndAsync(connection, 3, 0, 0, 0, 0, battle.Monster.Id, 0, "Captured.", ct);
             return;
         }
 
@@ -280,14 +283,14 @@ public sealed class BattlePacketHandler(
 
         character.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
-        await SendTurnResultAsync(stream, battle, action, playerDamage, petDamage, monsterDamage, monsterTarget, victory, defeat, ct);
+        await SendTurnResultAsync(connection, battle, action, playerDamage, petDamage, monsterDamage, monsterTarget, victory, defeat, ct);
 
         if (victory || defeat)
         {
             battles.End(characterId);
             session.LeaveBattle();
             await SendBattleEndAsync(
-                stream, victory ? (byte)1 : (byte)0, gainedExp, levelsGained,
+                connection, victory ? (byte)1 : (byte)0, gainedExp, levelsGained,
                 character.Level, character.Experience, droppedItemId, petLevelsGained,
                 victory ? "Victory." : "Defeat.", ct);
             logger.LogInformation("Battle ended CharacterId={CharacterId} Victory={Victory} PetHp={PetHp}", characterId, victory, battle.PetHp);
@@ -411,7 +414,7 @@ public sealed class BattlePacketHandler(
     private static long ExperienceForNextLevel(int level) => checked(level * 100L);
     private static long PetExperienceForNextLevel(int level) => checked(level * 80L);
 
-    private static Task SendBattleStartAsync(NetworkStream stream, BattleSession battle, CancellationToken ct)
+    private static Task SendBattleStartAsync(ClientConnection connection, BattleSession battle, CancellationToken ct)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, true);
@@ -437,10 +440,10 @@ public sealed class BattlePacketHandler(
             writer.Write(battle.Pet.Loyalty);
             writer.Write(battle.SelectedPetSkillId ?? 0);
         }
-        return ConnectionSendGate.SendPacketAsync(stream, Opcode.BattleStart, ms.ToArray(), ct);
+        return connection.SendAsync(Opcode.BattleStart, ms.ToArray(), ct);
     }
 
-    private static Task SendTurnResultAsync(NetworkStream stream, BattleSession battle, byte action, int playerDamage, int petDamage, int monsterDamage, byte monsterTarget, bool victory, bool defeat, CancellationToken ct)
+    private static Task SendTurnResultAsync(ClientConnection connection, BattleSession battle, byte action, int playerDamage, int petDamage, int monsterDamage, byte monsterTarget, bool victory, bool defeat, CancellationToken ct)
     {
         var payload = new byte[28];
         payload[0] = action;
@@ -453,10 +456,10 @@ public sealed class BattlePacketHandler(
         payload[25] = monsterTarget;
         payload[26] = victory ? (byte)1 : (byte)0;
         payload[27] = defeat ? (byte)1 : (byte)0;
-        return ConnectionSendGate.SendPacketAsync(stream, Opcode.BattleTurnResult, payload, ct);
+        return connection.SendAsync(Opcode.BattleTurnResult, payload, ct);
     }
 
-    private static Task SendBattleEndAsync(NetworkStream stream, byte result, int exp, int levelsGained, int level, long remainingExp, int rewardId, int petLevelsGained, string message, CancellationToken ct)
+    private static Task SendBattleEndAsync(ClientConnection connection, byte result, int exp, int levelsGained, int level, long remainingExp, int rewardId, int petLevelsGained, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[31 + messageBytes.Length];
@@ -469,10 +472,10 @@ public sealed class BattlePacketHandler(
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(25, 4), petLevelsGained);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(29, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(31));
-        return ConnectionSendGate.SendPacketAsync(stream, Opcode.BattleEnd, payload, ct);
+        return connection.SendAsync(Opcode.BattleEnd, payload, ct);
     }
 
-    private static Task SendPetSkillSelectResponseAsync(NetworkStream stream, bool success, byte slot, int skillId, string message, CancellationToken ct)
+    private static Task SendPetSkillSelectResponseAsync(ClientConnection connection, bool success, byte slot, int skillId, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 1 + 4 + 2 + messageBytes.Length];
@@ -481,7 +484,7 @@ public sealed class BattlePacketHandler(
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(2, 4), skillId);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(6, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(8));
-        return ConnectionSendGate.SendPacketAsync(stream, Opcode.BattlePetSkillSelectResponse, payload, ct);
+        return connection.SendAsync(Opcode.BattlePetSkillSelectResponse, payload, ct);
     }
 
     private static void WriteString(BinaryWriter writer, string value)
