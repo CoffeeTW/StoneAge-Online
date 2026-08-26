@@ -5,7 +5,7 @@ using StoneAge.Network.Protocol;
 const string host = "127.0.0.1";
 const int port = 7021;
 
-Console.WriteLine("StoneAge Online TestClient v0.1-15");
+Console.WriteLine("StoneAge Online TestClient v0.1-16");
 Console.WriteLine($"Connecting to {host}:{port} ...");
 
 await using var client = new AsyncPacketClient();
@@ -36,10 +36,11 @@ if (login.Payload.Length < 1 || login.Payload[0] != 1)
     return;
 
 Console.WriteLine("Commands: chars | create <name> | select <id> | enter | move <x> <y> <dir>");
+Console.WriteLine("Social: say <text> | pinvite <characterId> | paccept <inviterId> | preject <inviterId> | pleave");
 Console.WriteLine("Battle: attack | defend | escape | capture | petskill <slot>");
 Console.WriteLine("Pets: pets | petactive <id> | petname <id> <name> | petrelease <id> | petheal <id> | petrevive <id>");
 Console.WriteLine("Pet skills: petskills <petId> | petlearn <petId> <skillId> <slot> | petforget <petId> <slot> | quit");
-Console.WriteLine("Broadcasts and BattleStart/BattleEnd are received automatically; 'recv' is no longer needed.");
+Console.WriteLine("Broadcasts, chat, party events, and battle events are received automatically.");
 
 while (true)
 {
@@ -50,10 +51,7 @@ while (true)
 
     if (input.Equals("chars", StringComparison.OrdinalIgnoreCase))
     {
-        PrintPacket(await client.RequestAsync(
-            Opcode.CharacterListRequest,
-            ReadOnlyMemory<byte>.Empty,
-            Opcode.CharacterListResponse));
+        PrintPacket(await client.RequestAsync(Opcode.CharacterListRequest, ReadOnlyMemory<byte>.Empty, Opcode.CharacterListResponse));
         continue;
     }
 
@@ -69,10 +67,7 @@ while (true)
 
     if (input.StartsWith("select ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[7..], out var characterId))
     {
-        PrintPacket(await client.RequestAsync(
-            Opcode.CharacterSelectRequest,
-            BuildInt64Payload(characterId),
-            Opcode.CharacterSelectResponse));
+        PrintPacket(await client.RequestAsync(Opcode.CharacterSelectRequest, BuildInt64Payload(characterId), Opcode.CharacterSelectResponse));
         continue;
     }
 
@@ -93,10 +88,48 @@ while (true)
             payload[4] = direction;
             PrintPacket(await client.RequestAsync(Opcode.MoveRequest, payload, Opcode.MoveResponse));
         }
-        else
+        else Console.WriteLine("Usage: move <x> <y> <dir>");
+        continue;
+    }
+
+    if (input.StartsWith("say ", StringComparison.OrdinalIgnoreCase))
+    {
+        var textBytes = Encoding.UTF8.GetBytes(input[4..].Trim());
+        if (textBytes.Length is 0 or > 200)
         {
-            Console.WriteLine("Usage: move <x> <y> <dir>");
+            Console.WriteLine("Chat text must be 1-200 UTF-8 bytes.");
+            continue;
         }
+        var payload = new byte[2 + textBytes.Length];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(0, 2), checked((ushort)textBytes.Length));
+        textBytes.CopyTo(payload.AsSpan(2));
+        await client.SendAsync(Opcode.ChatSayRequest, payload);
+        continue;
+    }
+
+    if (input.StartsWith("pinvite ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[8..], out var inviteTargetId))
+    {
+        PrintPacket(await client.RequestAsync(Opcode.PartyInviteRequest, BuildInt64Payload(inviteTargetId), Opcode.PartyInviteResponse));
+        continue;
+    }
+
+    if ((input.StartsWith("paccept ", StringComparison.OrdinalIgnoreCase) || input.StartsWith("preject ", StringComparison.OrdinalIgnoreCase)))
+    {
+        var accepting = input.StartsWith("paccept ", StringComparison.OrdinalIgnoreCase);
+        var rawId = input[(accepting ? 8 : 8)..];
+        if (long.TryParse(rawId, out var inviterId))
+        {
+            var payload = new byte[9];
+            BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(0, 8), inviterId);
+            payload[8] = accepting ? (byte)1 : (byte)0;
+            PrintPacket(await client.RequestAsync(Opcode.PartyAnswerRequest, payload, Opcode.PartyAnswerResponse));
+        }
+        continue;
+    }
+
+    if (input.Equals("pleave", StringComparison.OrdinalIgnoreCase))
+    {
+        PrintPacket(await client.RequestAsync(Opcode.PartyLeaveRequest, ReadOnlyMemory<byte>.Empty, Opcode.PartyLeaveResponse));
         continue;
     }
 
@@ -116,10 +149,7 @@ while (true)
 
     if (input.StartsWith("petskill ", StringComparison.OrdinalIgnoreCase) && byte.TryParse(input[9..], out var battleSkillSlot))
     {
-        PrintPacket(await client.RequestAsync(
-            Opcode.BattlePetSkillSelectRequest,
-            new[] { battleSkillSlot },
-            Opcode.BattlePetSkillSelectResponse));
+        PrintPacket(await client.RequestAsync(Opcode.BattlePetSkillSelectRequest, new[] { battleSkillSlot }, Opcode.BattlePetSkillSelectResponse));
         continue;
     }
 
@@ -131,37 +161,25 @@ while (true)
 
     if (input.StartsWith("petactive ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[10..], out var activePetId))
     {
-        PrintPacket(await client.RequestAsync(
-            Opcode.PetActivateRequest,
-            BuildInt64Payload(activePetId),
-            Opcode.PetActivateResponse));
+        PrintPacket(await client.RequestAsync(Opcode.PetActivateRequest, BuildInt64Payload(activePetId), Opcode.PetActivateResponse));
         continue;
     }
 
     if (input.StartsWith("petheal ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[8..], out var healPetId))
     {
-        PrintPacket(await client.RequestAsync(
-            Opcode.PetHealRequest,
-            BuildInt64Payload(healPetId),
-            Opcode.PetHealResponse));
+        PrintPacket(await client.RequestAsync(Opcode.PetHealRequest, BuildInt64Payload(healPetId), Opcode.PetHealResponse));
         continue;
     }
 
     if (input.StartsWith("petrevive ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[10..], out var revivePetId))
     {
-        PrintPacket(await client.RequestAsync(
-            Opcode.PetReviveRequest,
-            BuildInt64Payload(revivePetId),
-            Opcode.PetReviveResponse));
+        PrintPacket(await client.RequestAsync(Opcode.PetReviveRequest, BuildInt64Payload(revivePetId), Opcode.PetReviveResponse));
         continue;
     }
 
     if (input.StartsWith("petrelease ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[11..], out var releasePetId))
     {
-        PrintPacket(await client.RequestAsync(
-            Opcode.PetReleaseRequest,
-            BuildInt64Payload(releasePetId),
-            Opcode.PetReleaseResponse));
+        PrintPacket(await client.RequestAsync(Opcode.PetReleaseRequest, BuildInt64Payload(releasePetId), Opcode.PetReleaseResponse));
         continue;
     }
 
@@ -182,10 +200,7 @@ while (true)
 
     if (input.StartsWith("petskills ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[10..], out var skillPetId))
     {
-        PrintPacket(await client.RequestAsync(
-            Opcode.PetSkillListRequest,
-            BuildInt64Payload(skillPetId),
-            Opcode.PetSkillListResponse));
+        PrintPacket(await client.RequestAsync(Opcode.PetSkillListRequest, BuildInt64Payload(skillPetId), Opcode.PetSkillListResponse));
         continue;
     }
 
@@ -249,9 +264,24 @@ static void PrintPacket(PacketFrame packet)
             PrintPlayerEnter(packet.Payload);
             break;
         case Opcode.PlayerLeaveBroadcast:
-            if (packet.Payload.Length >= 8)
-                Console.WriteLine($"Player left: {BinaryPrimitives.ReadInt64LittleEndian(packet.Payload)}");
+            if (packet.Payload.Length >= 8) Console.WriteLine($"Player left: {BinaryPrimitives.ReadInt64LittleEndian(packet.Payload)}");
             break;
+        case Opcode.ChatSayBroadcast:
+            PrintChat(packet.Payload);
+            break;
+        case Opcode.PartyInviteResponse:
+            PrintPartyInviteResult(packet.Payload);
+            break;
+        case Opcode.PartyInviteNotification:
+            PrintPartyInviteNotification(packet.Payload);
+            break;
+        case Opcode.PartyAnswerResponse:
+            PrintPartyAnswerResult(packet.Payload);
+            break;
+        case Opcode.PartyStateBroadcast:
+            PrintPartyState(packet.Payload);
+            break;
+        case Opcode.PartyLeaveResponse:
         case Opcode.PetActivateResponse:
         case Opcode.PetRenameResponse:
         case Opcode.PetReleaseResponse:
@@ -277,6 +307,68 @@ static void PrintPacket(PacketFrame packet)
         case Opcode.BattleEnd:
             PrintBattleEnd(packet.Payload);
             break;
+    }
+}
+
+static void PrintChat(byte[] payload)
+{
+    if (payload.Length < 12) return;
+    var offset = 0;
+    var characterId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
+    var name = ReadString(payload, ref offset);
+    var text = ReadString(payload, ref offset);
+    Console.WriteLine($"[SAY] {name}#{characterId}: {text}");
+}
+
+static void PrintPartyInviteNotification(byte[] payload)
+{
+    if (payload.Length < 10) return;
+    var offset = 0;
+    var inviterId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
+    var name = ReadString(payload, ref offset);
+    Console.WriteLine($"PARTY INVITE from {name}#{inviterId}. Use paccept {inviterId} or preject {inviterId}.");
+}
+
+static void PrintPartyInviteResult(byte[] payload)
+{
+    if (payload.Length < 11) return;
+    var offset = 0;
+    var result = payload[offset++];
+    var targetId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
+    var message = ReadString(payload, ref offset);
+    Console.WriteLine($"PartyInvite result={result} target={targetId} {message}");
+}
+
+static void PrintPartyAnswerResult(byte[] payload)
+{
+    if (payload.Length < 4) return;
+    var offset = 0;
+    var result = payload[offset++];
+    var accepted = payload[offset++] == 1;
+    var message = ReadString(payload, ref offset);
+    Console.WriteLine($"PartyAnswer result={result} accepted={accepted} {message}");
+}
+
+static void PrintPartyState(byte[] payload)
+{
+    if (payload.Length < 25) return;
+    var offset = 0;
+    var partyId = new Guid(payload.AsSpan(offset, 16)); offset += 16;
+    var leaderId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
+    var count = payload[offset++];
+    if (count == 0)
+    {
+        Console.WriteLine("PARTY cleared.");
+        return;
+    }
+
+    Console.WriteLine($"PARTY {partyId} leader={leaderId} members={count}");
+    for (var i = 0; i < count; i++)
+    {
+        if (offset + 10 > payload.Length) return;
+        var memberId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
+        var name = ReadString(payload, ref offset);
+        Console.WriteLine($"  {(memberId == leaderId ? "*" : " ")} {name}#{memberId}");
     }
 }
 
@@ -343,12 +435,7 @@ static void PrintPets(byte[] payload)
 static void PrintPetSkills(byte[] payload)
 {
     if (payload.Length < 3) return;
-    if (payload[0] != 1)
-    {
-        PrintSimpleResult(payload);
-        return;
-    }
-
+    if (payload[0] != 1) { PrintSimpleResult(payload); return; }
     var offset = 1;
     var petId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
     var count = payload[offset++];
