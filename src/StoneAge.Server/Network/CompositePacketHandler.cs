@@ -46,7 +46,7 @@ public sealed class CompositePacketHandler(
             Opcode.PetSkillListRequest or
             Opcode.PetSkillLearnRequest or
             Opcode.PetSkillForgetRequest => petSkillHandler.HandleAsync(session, packet, stream, cancellationToken),
-            Opcode.Ping => stream.WriteAsync(PacketCodec.Encode(Opcode.Pong, packet.Payload), cancellationToken).AsTask(),
+            Opcode.Ping => ConnectionSendGate.SendAsync(stream, PacketCodec.Encode(Opcode.Pong, packet.Payload), cancellationToken),
             _ => HandleUnknownAsync(session, packet)
         };
     }
