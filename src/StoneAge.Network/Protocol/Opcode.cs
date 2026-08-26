@@ -45,6 +45,8 @@ public enum Opcode : ushort
     BattleActionRequest = 0x0802,
     BattleTurnResult = 0x0803,
     BattleEnd = 0x0804,
+    BattlePetSkillSelectRequest = 0x0805,
+    BattlePetSkillSelectResponse = 0x0806,
     PetListRequest = 0x0901,
     PetListResponse = 0x0902,
     PetActivateRequest = 0x0903,
