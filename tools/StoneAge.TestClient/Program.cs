@@ -5,7 +5,7 @@ using StoneAge.Network.Protocol;
 const string host = "127.0.0.1";
 const int port = 7021;
 
-Console.WriteLine("StoneAge Online TestClient v0.1-16");
+Console.WriteLine("StoneAge Online TestClient v0.1-17");
 Console.WriteLine($"Connecting to {host}:{port} ...");
 
 await using var client = new AsyncPacketClient();
@@ -36,11 +36,11 @@ if (login.Payload.Length < 1 || login.Payload[0] != 1)
     return;
 
 Console.WriteLine("Commands: chars | create <name> | select <id> | enter | move <x> <y> <dir>");
-Console.WriteLine("Social: say <text> | pinvite <characterId> | paccept <inviterId> | preject <inviterId> | pleave");
+Console.WriteLine("Social: say <text> | psay <text> | pinvite <id> | paccept <id> | preject <id> | pkick <id> | pleader <id> | pleave");
 Console.WriteLine("Battle: attack | defend | escape | capture | petskill <slot>");
 Console.WriteLine("Pets: pets | petactive <id> | petname <id> <name> | petrelease <id> | petheal <id> | petrevive <id>");
 Console.WriteLine("Pet skills: petskills <petId> | petlearn <petId> <skillId> <slot> | petforget <petId> <slot> | quit");
-Console.WriteLine("Broadcasts, chat, party events, and battle events are received automatically.");
+Console.WriteLine("Broadcasts, chat, party events, presence, and battle events are received automatically.");
 
 while (true)
 {
@@ -94,16 +94,15 @@ while (true)
 
     if (input.StartsWith("say ", StringComparison.OrdinalIgnoreCase))
     {
-        var textBytes = Encoding.UTF8.GetBytes(input[4..].Trim());
-        if (textBytes.Length is 0 or > 200)
-        {
-            Console.WriteLine("Chat text must be 1-200 UTF-8 bytes.");
-            continue;
-        }
-        var payload = new byte[2 + textBytes.Length];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(0, 2), checked((ushort)textBytes.Length));
-        textBytes.CopyTo(payload.AsSpan(2));
-        await client.SendAsync(Opcode.ChatSayRequest, payload);
+        if (TryBuildChatPayload(input[4..], out var payload))
+            await client.SendAsync(Opcode.ChatSayRequest, payload);
+        continue;
+    }
+
+    if (input.StartsWith("psay ", StringComparison.OrdinalIgnoreCase))
+    {
+        if (TryBuildChatPayload(input[5..], out var payload))
+            await client.SendAsync(Opcode.PartyChatRequest, payload);
         continue;
     }
 
@@ -113,17 +112,28 @@ while (true)
         continue;
     }
 
-    if ((input.StartsWith("paccept ", StringComparison.OrdinalIgnoreCase) || input.StartsWith("preject ", StringComparison.OrdinalIgnoreCase)))
+    if (input.StartsWith("paccept ", StringComparison.OrdinalIgnoreCase) || input.StartsWith("preject ", StringComparison.OrdinalIgnoreCase))
     {
         var accepting = input.StartsWith("paccept ", StringComparison.OrdinalIgnoreCase);
-        var rawId = input[(accepting ? 8 : 8)..];
-        if (long.TryParse(rawId, out var inviterId))
+        if (long.TryParse(input[8..], out var inviterId))
         {
             var payload = new byte[9];
             BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(0, 8), inviterId);
             payload[8] = accepting ? (byte)1 : (byte)0;
             PrintPacket(await client.RequestAsync(Opcode.PartyAnswerRequest, payload, Opcode.PartyAnswerResponse));
         }
+        continue;
+    }
+
+    if (input.StartsWith("pkick ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[6..], out var kickTargetId))
+    {
+        PrintPacket(await client.RequestAsync(Opcode.PartyKickRequest, BuildInt64Payload(kickTargetId), Opcode.PartyKickResponse));
+        continue;
+    }
+
+    if (input.StartsWith("pleader ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[8..], out var leaderTargetId))
+    {
+        PrintPacket(await client.RequestAsync(Opcode.PartyLeaderTransferRequest, BuildInt64Payload(leaderTargetId), Opcode.PartyLeaderTransferResponse));
         continue;
     }
 
@@ -234,6 +244,22 @@ while (true)
     Console.WriteLine("Unknown command.");
 }
 
+static bool TryBuildChatPayload(string text, out byte[] payload)
+{
+    var textBytes = Encoding.UTF8.GetBytes(text.Trim());
+    if (textBytes.Length is 0 or > 200)
+    {
+        Console.WriteLine("Chat text must be 1-200 UTF-8 bytes.");
+        payload = [];
+        return false;
+    }
+
+    payload = new byte[2 + textBytes.Length];
+    BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(0, 2), checked((ushort)textBytes.Length));
+    textBytes.CopyTo(payload.AsSpan(2));
+    return true;
+}
+
 static byte[] BuildInt64Payload(long value)
 {
     var payload = new byte[8];
@@ -267,7 +293,10 @@ static void PrintPacket(PacketFrame packet)
             if (packet.Payload.Length >= 8) Console.WriteLine($"Player left: {BinaryPrimitives.ReadInt64LittleEndian(packet.Payload)}");
             break;
         case Opcode.ChatSayBroadcast:
-            PrintChat(packet.Payload);
+            PrintChat(packet.Payload, "SAY");
+            break;
+        case Opcode.PartyChatBroadcast:
+            PrintChat(packet.Payload, "PARTY");
             break;
         case Opcode.PartyInviteResponse:
             PrintPartyInviteResult(packet.Payload);
@@ -280,6 +309,13 @@ static void PrintPacket(PacketFrame packet)
             break;
         case Opcode.PartyStateBroadcast:
             PrintPartyState(packet.Payload);
+            break;
+        case Opcode.PartyPresenceBroadcast:
+            PrintPartyPresence(packet.Payload);
+            break;
+        case Opcode.PartyKickResponse:
+        case Opcode.PartyLeaderTransferResponse:
+            PrintPartyManageResult(packet.Payload);
             break;
         case Opcode.PartyLeaveResponse:
         case Opcode.PetActivateResponse:
@@ -310,14 +346,14 @@ static void PrintPacket(PacketFrame packet)
     }
 }
 
-static void PrintChat(byte[] payload)
+static void PrintChat(byte[] payload, string channel)
 {
     if (payload.Length < 12) return;
     var offset = 0;
     var characterId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
     var name = ReadString(payload, ref offset);
     var text = ReadString(payload, ref offset);
-    Console.WriteLine($"[SAY] {name}#{characterId}: {text}");
+    Console.WriteLine($"[{channel}] {name}#{characterId}: {text}");
 }
 
 static void PrintPartyInviteNotification(byte[] payload)
@@ -349,6 +385,16 @@ static void PrintPartyAnswerResult(byte[] payload)
     Console.WriteLine($"PartyAnswer result={result} accepted={accepted} {message}");
 }
 
+static void PrintPartyManageResult(byte[] payload)
+{
+    if (payload.Length < 11) return;
+    var offset = 0;
+    var result = payload[offset++];
+    var targetId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
+    var message = ReadString(payload, ref offset);
+    Console.WriteLine($"PartyManage result={result} target={targetId} {message}");
+}
+
 static void PrintPartyState(byte[] payload)
 {
     if (payload.Length < 25) return;
@@ -370,6 +416,18 @@ static void PrintPartyState(byte[] payload)
         var name = ReadString(payload, ref offset);
         Console.WriteLine($"  {(memberId == leaderId ? "*" : " ")} {name}#{memberId}");
     }
+}
+
+static void PrintPartyPresence(byte[] payload)
+{
+    if (payload.Length < 18) return;
+    var id = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(0, 8));
+    var online = payload[8] == 1;
+    var map = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(9, 4));
+    var x = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(13, 2));
+    var y = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(15, 2));
+    var direction = payload[17];
+    Console.WriteLine($"PARTY PRESENCE Player={id} Online={online} Map={map} ({x},{y}) Dir={direction}");
 }
 
 static void PrintMoveResponse(byte[] payload)

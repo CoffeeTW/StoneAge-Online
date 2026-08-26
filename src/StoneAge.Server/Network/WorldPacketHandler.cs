@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using StoneAge.Game.Party;
 using StoneAge.Game.World;
 using StoneAge.Infrastructure.Persistence;
 using StoneAge.Network.Protocol;
@@ -12,6 +13,7 @@ public sealed class WorldPacketHandler(
     IDbContextFactory<GameDbContext> dbFactory,
     WorldManager world,
     WorldConnectionRegistry connections,
+    PartyManager parties,
     BattlePacketHandler battleHandler,
     ILogger<WorldPacketHandler> logger) : IClientPacketHandler
 {
@@ -48,6 +50,8 @@ public sealed class WorldPacketHandler(
             var leavePacket = BuildPlayerLeaveBroadcast(characterId);
             foreach (var other in world.GetPlayersInMap(player.MapId).Where(x => x.CharacterId != characterId))
                 await connections.SendAsync(other.CharacterId, leavePacket, CancellationToken.None);
+
+            await BroadcastPartyPresenceAsync(characterId, player, false, CancellationToken.None);
         }
 
         connections.Unregister(characterId);
@@ -68,7 +72,6 @@ public sealed class WorldPacketHandler(
         var character = await db.Characters.AsNoTracking().SingleOrDefaultAsync(
             x => x.Id == session.CharacterId && x.AccountId == session.AccountId,
             cancellationToken);
-
         if (character is null)
         {
             await SendEnterWorldResponseAsync(connection, false, null, "Character not found.", cancellationToken);
@@ -77,7 +80,6 @@ public sealed class WorldPacketHandler(
 
         var player = new PlayerRuntime(character.Id, character.Name, character.MapId, character.X, character.Y, character.Direction);
         var existingPlayers = world.GetPlayersInMap(player.MapId).ToArray();
-
         if (!world.Enter(player) || !connections.Register(character.Id, connection))
         {
             world.Leave(character.Id);
@@ -94,15 +96,15 @@ public sealed class WorldPacketHandler(
             return;
         }
 
-        logger.LogInformation("Player entered world CharacterId={CharacterId} Map={MapId} X={X} Y={Y}", player.CharacterId, player.MapId, player.X, player.Y);
         await SendEnterWorldResponseAsync(connection, true, player, "Entered world.", cancellationToken);
-
         foreach (var existing in existingPlayers)
             await connections.SendAsync(player.CharacterId, BuildPlayerEnterBroadcast(existing), cancellationToken);
-
         var newPlayerPacket = BuildPlayerEnterBroadcast(player);
         foreach (var other in existingPlayers)
             await connections.SendAsync(other.CharacterId, newPlayerPacket, cancellationToken);
+
+        await BroadcastPartyPresenceAsync(player.CharacterId, player, true, cancellationToken);
+        logger.LogInformation("Player entered world CharacterId={CharacterId} Map={MapId} X={X} Y={Y}", player.CharacterId, player.MapId, player.X, player.Y);
     }
 
     private async Task MoveAsync(ClientConnection connection, byte[] payload, CancellationToken cancellationToken)
@@ -125,7 +127,6 @@ public sealed class WorldPacketHandler(
         var targetY = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(2, 2));
         var direction = payload[4];
         var result = world.TryMove(session.CharacterId.Value, targetX, targetY, direction);
-
         world.TryGetPlayer(session.CharacterId.Value, out var player);
         await SendMoveResponseAsync(connection, result, player, cancellationToken);
         if (result != MoveResult.Success || player is null)
@@ -135,7 +136,26 @@ public sealed class WorldPacketHandler(
         foreach (var other in world.GetPlayersInMap(player.MapId))
             await connections.SendAsync(other.CharacterId, packet, cancellationToken);
 
+        await BroadcastPartyPresenceAsync(player.CharacterId, player, true, cancellationToken);
         await battleHandler.TryStartEncounterAsync(connection, player.MapId, cancellationToken);
+    }
+
+    private async Task BroadcastPartyPresenceAsync(long characterId, PlayerRuntime player, bool online, CancellationToken ct)
+    {
+        var party = parties.GetParty(characterId);
+        if (party is null)
+            return;
+
+        var payload = new byte[18];
+        BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(0, 8), characterId);
+        payload[8] = online ? (byte)1 : (byte)0;
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(9, 4), player.MapId);
+        BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(13, 2), player.X);
+        BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(15, 2), player.Y);
+        payload[17] = player.Direction;
+        var packet = PacketCodec.Encode(Opcode.PartyPresenceBroadcast, payload);
+        foreach (var memberId in party.MemberIds.Where(x => x != characterId))
+            await connections.SendAsync(memberId, packet, ct);
     }
 
     private static Task SendMoveResponseAsync(ClientConnection connection, MoveResult result, PlayerRuntime? player, CancellationToken cancellationToken)

@@ -21,6 +21,15 @@ public enum PartyAnswerResult : byte
     PartyFull = 4
 }
 
+public enum PartyManageResult : byte
+{
+    Success = 0,
+    NotInParty = 1,
+    NotLeader = 2,
+    InvalidTarget = 3,
+    TargetNotMember = 4
+}
+
 public sealed class PartyManager
 {
     public const int MaxMembers = 5;
@@ -104,6 +113,57 @@ public sealed class PartyManager
             RemoveInvitesFor(targetId);
             snapshot = Snapshot(party);
             return PartyAnswerResult.Success;
+        }
+    }
+
+    public PartyManageResult Kick(long leaderId, long targetId, out PartySnapshot? remaining)
+    {
+        remaining = null;
+        lock (_sync)
+        {
+            if (!_membership.TryGetValue(leaderId, out var partyId) || !_parties.TryGetValue(partyId, out var party))
+                return PartyManageResult.NotInParty;
+            if (party.LeaderId != leaderId)
+                return PartyManageResult.NotLeader;
+            if (targetId <= 0 || targetId == leaderId)
+                return PartyManageResult.InvalidTarget;
+            if (!_membership.TryGetValue(targetId, out var targetPartyId) || targetPartyId != partyId || !party.Members.Contains(targetId))
+                return PartyManageResult.TargetNotMember;
+
+            party.Members.Remove(targetId);
+            _membership.Remove(targetId);
+            RemoveInvitesFor(targetId);
+
+            if (party.Members.Count <= 1)
+            {
+                foreach (var memberId in party.Members)
+                    _membership.Remove(memberId);
+                _parties.Remove(party.Id);
+                return PartyManageResult.Success;
+            }
+
+            remaining = Snapshot(party);
+            return PartyManageResult.Success;
+        }
+    }
+
+    public PartyManageResult TransferLeader(long leaderId, long targetId, out PartySnapshot? snapshot)
+    {
+        snapshot = null;
+        lock (_sync)
+        {
+            if (!_membership.TryGetValue(leaderId, out var partyId) || !_parties.TryGetValue(partyId, out var party))
+                return PartyManageResult.NotInParty;
+            if (party.LeaderId != leaderId)
+                return PartyManageResult.NotLeader;
+            if (targetId <= 0 || targetId == leaderId)
+                return PartyManageResult.InvalidTarget;
+            if (!_membership.TryGetValue(targetId, out var targetPartyId) || targetPartyId != partyId || !party.Members.Contains(targetId))
+                return PartyManageResult.TargetNotMember;
+
+            party.LeaderId = targetId;
+            snapshot = Snapshot(party);
+            return PartyManageResult.Success;
         }
     }
 
