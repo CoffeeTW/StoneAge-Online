@@ -12,6 +12,7 @@ public sealed class CompositePacketHandler(
     InventoryShopPacketHandler inventoryShopHandler,
     ItemEquipmentPacketHandler itemEquipmentHandler,
     BattlePacketHandler battleHandler,
+    PetPacketHandler petHandler,
     ILogger<CompositePacketHandler> logger) : IClientPacketHandler, IClientConnectionLifecycle
 {
     public Task HandleAsync(
@@ -37,6 +38,10 @@ public sealed class CompositePacketHandler(
             Opcode.ItemEquipRequest or
             Opcode.ItemUnequipRequest => itemEquipmentHandler.HandleAsync(session, packet, stream, cancellationToken),
             Opcode.BattleActionRequest => battleHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.PetListRequest or
+            Opcode.PetActivateRequest or
+            Opcode.PetRenameRequest or
+            Opcode.PetReleaseRequest => petHandler.HandleAsync(session, packet, stream, cancellationToken),
             Opcode.Ping => stream.WriteAsync(PacketCodec.Encode(Opcode.Pong, packet.Payload), cancellationToken).AsTask(),
             _ => HandleUnknownAsync(session, packet)
         };
