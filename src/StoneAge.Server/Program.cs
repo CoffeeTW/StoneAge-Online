@@ -28,10 +28,12 @@ builder.Services.AddSingleton(_ => ItemCatalog.Load(Path.Combine(AppContext.Base
 builder.Services.AddSingleton(_ => MonsterCatalog.Load(Path.Combine(AppContext.BaseDirectory, "data", "monsters", "monsters.json")));
 builder.Services.AddSingleton(_ => PetSkillCatalog.Load(Path.Combine(AppContext.BaseDirectory, "data", "pet-skills", "pet-skills.json")));
 builder.Services.AddSingleton<BattleManager>();
+builder.Services.AddSingleton<PartyBattleManager>();
 builder.Services.AddSingleton<WorldConnectionRegistry>();
 builder.Services.AddSingleton<LoginPacketHandler>();
 builder.Services.AddSingleton<CharacterPacketHandler>();
 builder.Services.AddSingleton<BattlePacketHandler>();
+builder.Services.AddSingleton<PartyBattlePacketHandler>();
 builder.Services.AddSingleton<WorldPacketHandler>();
 builder.Services.AddSingleton<NpcPacketHandler>();
 builder.Services.AddSingleton<InventoryShopPacketHandler>();
