@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using StoneAge.Game.Battle;
 using StoneAge.Game.Party;
 using StoneAge.Game.World;
 using StoneAge.Infrastructure.Persistence;
@@ -14,18 +15,19 @@ public sealed class WorldPacketHandler(
     WorldManager world,
     WorldConnectionRegistry connections,
     PartyManager parties,
+    BattleManager battles,
     BattlePacketHandler battleHandler,
     ILogger<WorldPacketHandler> logger) : IClientPacketHandler
 {
+    private sealed record FollowPosition(long CharacterId, int MapId, short X, short Y, byte Direction);
+
     public Task HandleAsync(ClientConnection connection, PacketFrame packet, CancellationToken cancellationToken)
-    {
-        return packet.Opcode switch
+        => packet.Opcode switch
         {
             Opcode.EnterWorld => EnterWorldAsync(connection, cancellationToken),
             Opcode.MoveRequest => MoveAsync(connection, packet.Payload, cancellationToken),
             _ => Task.CompletedTask
         };
-    }
 
     public async Task DisconnectAsync(GameSession session)
     {
@@ -123,21 +125,77 @@ public sealed class WorldPacketHandler(
             return;
         }
 
+        var characterId = session.CharacterId.Value;
+        var followChain = CaptureFollowChain(characterId);
         var targetX = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(0, 2));
         var targetY = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(2, 2));
         var direction = payload[4];
-        var result = world.TryMove(session.CharacterId.Value, targetX, targetY, direction);
-        world.TryGetPlayer(session.CharacterId.Value, out var player);
+        var result = world.TryMove(characterId, targetX, targetY, direction);
+        world.TryGetPlayer(characterId, out var player);
         await SendMoveResponseAsync(connection, result, player, cancellationToken);
         if (result != MoveResult.Success || player is null)
             return;
 
+        await BroadcastMoveAsync(player, cancellationToken);
+        await BroadcastPartyPresenceAsync(player.CharacterId, player, true, cancellationToken);
+        await ApplyFollowChainAsync(followChain, cancellationToken);
+
+        var party = parties.GetParty(characterId);
+        if (party is not null && party.LeaderId == characterId)
+        {
+            var encounterMembers = party.MemberIds
+                .Where(id => world.TryGetPlayer(id, out var member) && member is not null && member.MapId == player.MapId)
+                .ToArray();
+            battles.PrepareParticipantRoster(characterId, encounterMembers);
+        }
+
+        await battleHandler.TryStartEncounterAsync(connection, player.MapId, cancellationToken);
+    }
+
+    private IReadOnlyList<FollowPosition> CaptureFollowChain(long leaderId)
+    {
+        var party = parties.GetParty(leaderId);
+        if (party is null || party.LeaderId != leaderId)
+            return Array.Empty<FollowPosition>();
+
+        var result = new List<FollowPosition>();
+        foreach (var memberId in party.MemberIds)
+        {
+            if (!world.TryGetPlayer(memberId, out var member) || member is null)
+                continue;
+            result.Add(new FollowPosition(memberId, member.MapId, member.X, member.Y, member.Direction));
+        }
+        return result;
+    }
+
+    private async Task ApplyFollowChainAsync(IReadOnlyList<FollowPosition> chain, CancellationToken ct)
+    {
+        if (chain.Count < 2)
+            return;
+
+        var previous = chain[0];
+        for (var i = 1; i < chain.Count; i++)
+        {
+            var followerOld = chain[i];
+            if (followerOld.MapId != previous.MapId ||
+                !world.TryFollowMove(followerOld.CharacterId, previous.MapId, previous.X, previous.Y, previous.Direction) ||
+                !world.TryGetPlayer(followerOld.CharacterId, out var follower) || follower is null)
+            {
+                previous = followerOld;
+                continue;
+            }
+
+            await BroadcastMoveAsync(follower, ct);
+            await BroadcastPartyPresenceAsync(follower.CharacterId, follower, true, ct);
+            previous = followerOld;
+        }
+    }
+
+    private async Task BroadcastMoveAsync(PlayerRuntime player, CancellationToken ct)
+    {
         var packet = BuildMoveBroadcast(player);
         foreach (var other in world.GetPlayersInMap(player.MapId))
-            await connections.SendAsync(other.CharacterId, packet, cancellationToken);
-
-        await BroadcastPartyPresenceAsync(player.CharacterId, player, true, cancellationToken);
-        await battleHandler.TryStartEncounterAsync(connection, player.MapId, cancellationToken);
+            await connections.SendAsync(other.CharacterId, packet, ct);
     }
 
     private async Task BroadcastPartyPresenceAsync(long characterId, PlayerRuntime player, bool online, CancellationToken ct)

@@ -86,6 +86,17 @@ public sealed class WorldManager
         return MoveResult.Success;
     }
 
+    public bool TryFollowMove(long characterId, int mapId, short targetX, short targetY, byte direction)
+    {
+        if (!_players.TryGetValue(characterId, out var player) || player.MapId != mapId || direction > 7)
+            return false;
+        if (!_maps.TryGetValue(mapId, out var map) || !map.IsWalkable(targetX, targetY))
+            return false;
+
+        player.MoveTo(targetX, targetY, direction);
+        return true;
+    }
+
     public bool TryTeleport(long characterId, int targetMapId, short targetX, short targetY, byte direction, out int oldMapId)
     {
         oldMapId = 0;

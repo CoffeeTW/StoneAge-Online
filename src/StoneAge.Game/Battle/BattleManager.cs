@@ -26,27 +26,15 @@ public sealed class MonsterDefinition
 }
 
 public sealed record BattlePetSnapshot(
-    long Id,
-    string Name,
-    int Level,
-    int Hp,
-    int MaxHp,
-    int Attack,
-    int Defense,
-    int Agility,
-    int Loyalty,
-    byte Earth,
-    byte Water,
-    byte Fire,
-    byte Wind,
-    int? PrimarySkillId);
+    long Id, string Name, int Level, int Hp, int MaxHp, int Attack, int Defense, int Agility, int Loyalty,
+    byte Earth, byte Water, byte Fire, byte Wind, int? PrimarySkillId);
+
+public sealed record BattleParticipantSnapshot(long CharacterId, bool IsLeader);
 
 public sealed class MonsterCatalog
 {
     private readonly Dictionary<int, MonsterDefinition> _monsters;
-
-    private MonsterCatalog(IEnumerable<MonsterDefinition> monsters)
-        => _monsters = monsters.ToDictionary(x => x.Id);
+    private MonsterCatalog(IEnumerable<MonsterDefinition> monsters) => _monsters = monsters.ToDictionary(x => x.Id);
 
     public static MonsterCatalog Load(string path)
     {
@@ -65,17 +53,8 @@ public sealed class MonsterCatalog
 public sealed class BattleSession
 {
     public BattleSession(
-        long characterId,
-        MonsterDefinition monster,
-        int playerHp,
-        int playerAttack,
-        int playerDefense,
-        int playerAgility,
-        byte earth,
-        byte water,
-        byte fire,
-        byte wind,
-        BattlePetSnapshot? pet)
+        long characterId, MonsterDefinition monster, int playerHp, int playerAttack, int playerDefense, int playerAgility,
+        byte earth, byte water, byte fire, byte wind, BattlePetSnapshot? pet, IReadOnlyList<long>? participantIds = null)
     {
         CharacterId = characterId;
         Monster = monster;
@@ -91,9 +70,16 @@ public sealed class BattleSession
         PetHp = pet?.Hp ?? 0;
         SelectedPetSkillId = pet?.PrimarySkillId;
         MonsterHp = monster.MaxHp;
+
+        var ids = (participantIds ?? [characterId]).Where(x => x > 0).Distinct().ToList();
+        ids.Remove(characterId);
+        ids.Insert(0, characterId);
+        Participants = ids.Select(id => new BattleParticipantSnapshot(id, id == characterId)).ToArray();
     }
 
     public long CharacterId { get; }
+    public IReadOnlyList<BattleParticipantSnapshot> Participants { get; }
+    public bool IsPartyBattleFoundation => Participants.Count > 1;
     public MonsterDefinition Monster { get; }
     public int PlayerHp { get; set; }
     public int PlayerAttack { get; }
@@ -113,25 +99,25 @@ public sealed class BattleSession
 public sealed class BattleManager(MonsterCatalog monsters)
 {
     private readonly ConcurrentDictionary<long, BattleSession> _battles = new();
+    private readonly ConcurrentDictionary<long, long[]> _pendingParticipantRosters = new();
 
     public bool IsInBattle(long characterId) => _battles.ContainsKey(characterId);
     public bool TryGet(long characterId, out BattleSession? battle) => _battles.TryGetValue(characterId, out battle);
     public void End(long characterId) => _battles.TryRemove(characterId, out _);
 
-    public BattleSession? TryStart(
-        long characterId,
-        int mapId,
-        int playerHp,
-        int playerAttack,
-        int playerDefense,
-        int playerAgility,
-        byte earth,
-        byte water,
-        byte fire,
-        byte wind,
-        BattlePetSnapshot? pet,
-        int encounterPercent = 20)
+    public void PrepareParticipantRoster(long leaderId, IEnumerable<long> participantIds)
     {
+        var ids = participantIds.Where(x => x > 0).Distinct().ToList();
+        ids.Remove(leaderId);
+        ids.Insert(0, leaderId);
+        _pendingParticipantRosters[leaderId] = ids.ToArray();
+    }
+
+    public BattleSession? TryStart(
+        long characterId, int mapId, int playerHp, int playerAttack, int playerDefense, int playerAgility,
+        byte earth, byte water, byte fire, byte wind, BattlePetSnapshot? pet, int encounterPercent = 20)
+    {
+        _pendingParticipantRosters.TryRemove(characterId, out var participantIds);
         if (_battles.ContainsKey(characterId) || Random.Shared.Next(100) >= encounterPercent)
             return null;
 
@@ -155,7 +141,7 @@ public sealed class BattleManager(MonsterCatalog monsters)
         var monster = selected ?? candidates[^1];
         var battle = new BattleSession(
             characterId, monster, playerHp, playerAttack, playerDefense, playerAgility,
-            earth, water, fire, wind, pet);
+            earth, water, fire, wind, pet, participantIds);
         return _battles.TryAdd(characterId, battle) ? battle : null;
     }
 }
