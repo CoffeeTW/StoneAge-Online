@@ -52,5 +52,11 @@ public enum Opcode : ushort
     PetRenameRequest = 0x0905,
     PetRenameResponse = 0x0906,
     PetReleaseRequest = 0x0907,
-    PetReleaseResponse = 0x0908
+    PetReleaseResponse = 0x0908,
+    PetSkillListRequest = 0x0909,
+    PetSkillListResponse = 0x090A,
+    PetSkillLearnRequest = 0x090B,
+    PetSkillLearnResponse = 0x090C,
+    PetSkillForgetRequest = 0x090D,
+    PetSkillForgetResponse = 0x090E
 }
