@@ -12,6 +12,9 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
     public DbSet<CharacterPetSkill> CharacterPetSkills => Set<CharacterPetSkill>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
+        => ConfigureModel(modelBuilder);
+
+    public static void ConfigureModel(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Account>(entity =>
         {
