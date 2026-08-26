@@ -41,14 +41,24 @@ internal static class PartyBattleConsole
             Console.WriteLine($"PARTY BATTLE {battleId}: {monsterName}#{monsterId} Lv.{monsterLevel} HP={monsterHp}/{monsterMaxHp}");
             for (var i = 0; i < count; i++)
             {
-                var characterId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
+                var characterId = ReadInt64(payload, ref offset);
                 var name = ReadString(payload, ref offset);
-                var leader = payload[offset++] == 1;
-                var hp = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
-                var maxHp = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
+                var leader = ReadByte(payload, ref offset) == 1;
+                var hp = ReadInt32(payload, ref offset);
+                var maxHp = ReadInt32(payload, ref offset);
+                var hasPet = ReadByte(payload, ref offset) == 1;
                 Console.WriteLine($"  {(leader ? "*" : " ")} {name}#{characterId} HP={hp}/{maxHp}");
+                if (hasPet)
+                {
+                    var petId = ReadInt64(payload, ref offset);
+                    var petName = ReadString(payload, ref offset);
+                    var petHp = ReadInt32(payload, ref offset);
+                    var petMaxHp = ReadInt32(payload, ref offset);
+                    var skillId = ReadInt32(payload, ref offset);
+                    Console.WriteLine($"      PET {petName}#{petId} HP={petHp}/{petMaxHp} Skill={skillId}");
+                }
             }
-            Console.WriteLine("Use attack or defend. Server waits for every living party member.");
+            Console.WriteLine("Use attack or defend. Active pets act automatically when obedient.");
         }
         catch (Exception ex)
         {
@@ -70,22 +80,26 @@ internal static class PartyBattleConsole
         {
             if (payload.Length < 11) return;
             var offset = 0;
-            var turn = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
-            var monsterHp = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
-            var victory = payload[offset++] == 1;
-            var defeat = payload[offset++] == 1;
-            var hitCount = payload[offset++];
+            var turn = ReadInt32(payload, ref offset);
+            var monsterHp = ReadInt32(payload, ref offset);
+            var victory = ReadByte(payload, ref offset) == 1;
+            var defeat = ReadByte(payload, ref offset) == 1;
+            var hitCount = ReadByte(payload, ref offset);
             Console.WriteLine($"PARTY TURN {turn}: MonsterHP={monsterHp} Victory={victory} Defeat={defeat}");
             for (var i = 0; i < hitCount; i++)
             {
-                if (offset + 24 > payload.Length) return;
-                var actorId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
-                var targetId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
-                var damage = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
-                var targetHp = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
-                var actor = actorId == 0 ? "Monster" : $"Player#{actorId}";
-                var target = targetId == 0 ? "Monster" : $"Player#{targetId}";
-                Console.WriteLine($"  {actor} -> {target} DMG={damage} TargetHP={targetHp}");
+                var actorType = ReadByte(payload, ref offset);
+                var actorId = ReadInt64(payload, ref offset);
+                var targetType = ReadByte(payload, ref offset);
+                var targetId = ReadInt64(payload, ref offset);
+                var amount = ReadInt32(payload, ref offset);
+                var targetHp = ReadInt32(payload, ref offset);
+                var isHeal = ReadByte(payload, ref offset) == 1;
+                var actor = ActorLabel(actorType, actorId);
+                var target = ActorLabel(targetType, targetId);
+                Console.WriteLine(isHeal
+                    ? $"  {actor} -> {target} HEAL={amount} TargetHP={targetHp}"
+                    : $"  {actor} -> {target} DMG={amount} TargetHP={targetHp}");
             }
         }
         catch (Exception ex)
@@ -98,18 +112,53 @@ internal static class PartyBattleConsole
     {
         try
         {
-            if (payload.Length < 11) return;
+            if (payload.Length < 23) return;
             var offset = 0;
-            var result = payload[offset++];
-            var expEach = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
-            var monsterId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
+            var result = ReadByte(payload, ref offset);
+            var expEach = ReadInt32(payload, ref offset);
+            var monsterId = ReadInt32(payload, ref offset);
+            var rewardItemId = ReadInt32(payload, ref offset);
+            var rewardOwnerId = ReadInt64(payload, ref offset);
             var message = ReadString(payload, ref offset);
             Console.WriteLine($"PARTY BATTLE END result={result} monster={monsterId} EXP/participant={expEach} {message}");
+            if (rewardItemId != 0)
+                Console.WriteLine($"PARTY DROP Item={rewardItemId} OwnerCharacter={rewardOwnerId}");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"PartyBattleEnd parse error: {ex.Message}");
         }
+    }
+
+    private static string ActorLabel(byte type, long id)
+        => type switch
+        {
+            0 => "Monster",
+            1 => $"Player#{id}",
+            2 => $"Pet#{id}",
+            _ => $"Actor({type})#{id}"
+        };
+
+    private static byte ReadByte(byte[] payload, ref int offset)
+    {
+        if (offset >= payload.Length) throw new InvalidDataException("Truncated byte.");
+        return payload[offset++];
+    }
+
+    private static int ReadInt32(byte[] payload, ref int offset)
+    {
+        if (offset + 4 > payload.Length) throw new InvalidDataException("Truncated Int32.");
+        var value = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4));
+        offset += 4;
+        return value;
+    }
+
+    private static long ReadInt64(byte[] payload, ref int offset)
+    {
+        if (offset + 8 > payload.Length) throw new InvalidDataException("Truncated Int64.");
+        var value = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8));
+        offset += 8;
+        return value;
     }
 
     private static string ReadString(byte[] payload, ref int offset)
