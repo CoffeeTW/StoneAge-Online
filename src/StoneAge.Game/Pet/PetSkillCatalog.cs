@@ -8,6 +8,8 @@ public sealed class PetSkillDefinition
     public string Name { get; init; } = string.Empty;
     public int PowerPercent { get; init; } = 100;
     public string Element { get; init; } = "natural";
+    public string Effect { get; init; } = "damage";
+    public int EffectPower { get; init; }
 }
 
 public sealed class PetSkillCatalog
