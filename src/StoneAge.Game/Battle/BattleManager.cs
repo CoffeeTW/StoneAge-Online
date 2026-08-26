@@ -41,6 +41,8 @@ public sealed record BattlePetSnapshot(
     byte Wind,
     int? PrimarySkillId);
 
+public sealed record BattleParticipantSnapshot(long CharacterId, bool IsLeader);
+
 public sealed class MonsterCatalog
 {
     private readonly Dictionary<int, MonsterDefinition> _monsters;
@@ -75,7 +77,8 @@ public sealed class BattleSession
         byte water,
         byte fire,
         byte wind,
-        BattlePetSnapshot? pet)
+        BattlePetSnapshot? pet,
+        IReadOnlyList<long>? participantIds = null)
     {
         CharacterId = characterId;
         Monster = monster;
@@ -91,9 +94,16 @@ public sealed class BattleSession
         PetHp = pet?.Hp ?? 0;
         SelectedPetSkillId = pet?.PrimarySkillId;
         MonsterHp = monster.MaxHp;
+
+        var ids = (participantIds ?? [characterId]).Where(x => x > 0).Distinct().ToList();
+        ids.Remove(characterId);
+        ids.Insert(0, characterId);
+        Participants = ids.Select(id => new BattleParticipantSnapshot(id, id == characterId)).ToArray();
     }
 
     public long CharacterId { get; }
+    public IReadOnlyList<BattleParticipantSnapshot> Participants { get; }
+    public bool IsPartyBattleFoundation => Participants.Count > 1;
     public MonsterDefinition Monster { get; }
     public int PlayerHp { get; set; }
     public int PlayerAttack { get; }
@@ -130,6 +140,7 @@ public sealed class BattleManager(MonsterCatalog monsters)
         byte fire,
         byte wind,
         BattlePetSnapshot? pet,
+        IReadOnlyList<long>? participantIds = null,
         int encounterPercent = 20)
     {
         if (_battles.ContainsKey(characterId) || Random.Shared.Next(100) >= encounterPercent)
@@ -155,7 +166,7 @@ public sealed class BattleManager(MonsterCatalog monsters)
         var monster = selected ?? candidates[^1];
         var battle = new BattleSession(
             characterId, monster, playerHp, playerAttack, playerDefense, playerAgility,
-            earth, water, fire, wind, pet);
+            earth, water, fire, wind, pet, participantIds);
         return _battles.TryAdd(characterId, battle) ? battle : null;
     }
 }
