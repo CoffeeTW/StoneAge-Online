@@ -35,7 +35,8 @@ public static class DatabaseSchemaUpgrade
             FROM ranked
             WHERE ci."Id" = ranked."Id";
 
-            CREATE UNIQUE INDEX IF NOT EXISTS "IX_character_items_CharacterId_ItemId"
+            DROP INDEX IF EXISTS "IX_character_items_CharacterId_ItemId";
+            CREATE INDEX IF NOT EXISTS "IX_character_items_CharacterId_ItemId"
                 ON character_items ("CharacterId", "ItemId");
             CREATE UNIQUE INDEX IF NOT EXISTS "IX_character_items_CharacterId_Slot"
                 ON character_items ("CharacterId", "Slot");

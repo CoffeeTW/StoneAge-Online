@@ -39,7 +39,7 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
         {
             entity.ToTable("character_items");
             entity.HasKey(x => x.Id);
-            entity.HasIndex(x => new { x.CharacterId, x.ItemId }).IsUnique();
+            entity.HasIndex(x => new { x.CharacterId, x.ItemId });
             entity.HasIndex(x => new { x.CharacterId, x.Slot }).IsUnique();
             entity.HasIndex(x => new { x.CharacterId, x.EquippedSlot })
                 .IsUnique()

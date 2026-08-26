@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
-using StoneAge.Domain.Entities;
 using StoneAge.Game.Item;
 using StoneAge.Game.Npc;
 using StoneAge.Game.World;
@@ -109,38 +108,19 @@ public sealed class InventoryShopPacketHandler(
             return;
         }
 
-        var rows = await db.CharacterItems.Where(x => x.CharacterId == characterId).ToListAsync(ct);
-        var row = rows.SingleOrDefault(x => x.ItemId == itemId);
-        var current = row?.Quantity ?? 0;
-        if (current + quantity > item.MaxStack)
+        var rows = await db.CharacterItems
+            .Where(x => x.CharacterId == characterId)
+            .OrderBy(x => x.Slot)
+            .ToListAsync(ct);
+        if (!InventoryStackService.TryAdd(characterId, itemId, quantity, item.MaxStack, InventoryCapacity, rows))
         {
-            await SendTradeResultAsync(connection, Opcode.ShopBuyResponse, false, "Stack limit reached.", ct);
+            await SendTradeResultAsync(connection, Opcode.ShopBuyResponse, false, "Inventory does not have enough stack space.", ct);
             return;
         }
 
         character.Stone -= total;
-        if (row is null)
-        {
-            var freeSlot = FindFreeSlot(rows);
-            if (freeSlot is null)
-            {
-                await SendTradeResultAsync(connection, Opcode.ShopBuyResponse, false, "Inventory is full.", ct);
-                return;
-            }
-
-            db.CharacterItems.Add(new CharacterItem
-            {
-                CharacterId = characterId,
-                ItemId = itemId,
-                Quantity = quantity,
-                Slot = freeSlot.Value
-            });
-        }
-        else
-        {
-            row.Quantity += quantity;
-            row.UpdatedAt = DateTimeOffset.UtcNow;
-        }
+        foreach (var row in rows.Where(x => x.Id == 0))
+            db.CharacterItems.Add(row);
 
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
@@ -156,22 +136,6 @@ public sealed class InventoryShopPacketHandler(
             return;
         }
 
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        var character = await db.Characters.SingleAsync(x => x.Id == characterId, ct);
-        var row = await db.CharacterItems.SingleOrDefaultAsync(x => x.CharacterId == characterId && x.ItemId == itemId, ct);
-        if (row is null || row.Quantity < quantity)
-        {
-            await SendTradeResultAsync(connection, Opcode.ShopSellResponse, false, "Not enough items.", ct);
-            return;
-        }
-
-        if (row.EquippedSlot is not null)
-        {
-            await SendTradeResultAsync(connection, Opcode.ShopSellResponse, false, "Unequip the item before selling it.", ct);
-            return;
-        }
-
         int total;
         try { total = checked(item.SellPrice * quantity); }
         catch (OverflowException)
@@ -180,22 +144,26 @@ public sealed class InventoryShopPacketHandler(
             return;
         }
 
-        row.Quantity -= quantity;
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var character = await db.Characters.SingleAsync(x => x.Id == characterId, ct);
+        var rows = await db.CharacterItems
+            .Where(x => x.CharacterId == characterId)
+            .OrderBy(x => x.Slot)
+            .ToListAsync(ct);
+        var removedRows = new List<StoneAge.Domain.Entities.CharacterItem>();
+        if (!InventoryStackService.TryRemoveUnequipped(characterId, itemId, quantity, rows, removedRows))
+        {
+            await SendTradeResultAsync(connection, Opcode.ShopSellResponse, false, "Not enough unequipped items.", ct);
+            return;
+        }
+
         character.Stone = checked(character.Stone + total);
-        if (row.Quantity == 0) db.CharacterItems.Remove(row);
-        else row.UpdatedAt = DateTimeOffset.UtcNow;
+        db.CharacterItems.RemoveRange(removedRows);
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         logger.LogInformation("Shop sell CharacterId={CharacterId} NpcId={NpcId} ItemId={ItemId} Quantity={Quantity} Total={Total}", characterId, npcId, itemId, quantity, total);
         await SendTradeResultAsync(connection, Opcode.ShopSellResponse, true, "Sale complete.", ct);
-    }
-
-    private static short? FindFreeSlot(IReadOnlyCollection<CharacterItem> rows)
-    {
-        var used = rows.Select(x => x.Slot).ToHashSet();
-        for (short slot = 0; slot < InventoryCapacity; slot++)
-            if (!used.Contains(slot)) return slot;
-        return null;
     }
 
     private bool CanUseShop(long characterId, int npcId)
