@@ -38,7 +38,8 @@ public sealed class CompositePacketHandler(
             Opcode.EquipmentListRequest or
             Opcode.ItemEquipRequest or
             Opcode.ItemUnequipRequest => itemEquipmentHandler.HandleAsync(session, packet, stream, cancellationToken),
-            Opcode.BattleActionRequest => battleHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.BattleActionRequest or
+            Opcode.BattlePetSkillSelectRequest => battleHandler.HandleAsync(session, packet, stream, cancellationToken),
             Opcode.PetListRequest or
             Opcode.PetActivateRequest or
             Opcode.PetRenameRequest or
@@ -46,7 +47,7 @@ public sealed class CompositePacketHandler(
             Opcode.PetSkillListRequest or
             Opcode.PetSkillLearnRequest or
             Opcode.PetSkillForgetRequest => petSkillHandler.HandleAsync(session, packet, stream, cancellationToken),
-            Opcode.Ping => ConnectionSendGate.SendAsync(stream, PacketCodec.Encode(Opcode.Pong, packet.Payload), cancellationToken),
+            Opcode.Ping => ConnectionSendGate.SendPacketAsync(stream, Opcode.Pong, packet.Payload, cancellationToken),
             _ => HandleUnknownAsync(session, packet)
         };
     }
