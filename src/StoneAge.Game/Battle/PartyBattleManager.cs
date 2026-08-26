@@ -84,6 +84,15 @@ public sealed class PartyBattleSession
     public int MonsterHp { get; private set; }
     public int Turn { get; private set; } = 1;
 
+    public bool CanSubmitAction(long characterId)
+    {
+        lock (_sync)
+        {
+            var actor = Participants.SingleOrDefault(x => x.CharacterId == characterId);
+            return actor is not null && actor.CurrentHp > 0 && !_actions.ContainsKey(characterId);
+        }
+    }
+
     public bool TrySubmitAction(long characterId, byte action, out PartyBattleTurnResolution? resolution)
     {
         resolution = null;
