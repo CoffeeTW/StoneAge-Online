@@ -133,6 +133,15 @@ public sealed class PartyManager
             party.Members.Remove(targetId);
             _membership.Remove(targetId);
             RemoveInvitesFor(targetId);
+
+            if (party.Members.Count <= 1)
+            {
+                foreach (var memberId in party.Members)
+                    _membership.Remove(memberId);
+                _parties.Remove(party.Id);
+                return PartyManageResult.Success;
+            }
+
             remaining = Snapshot(party);
             return PartyManageResult.Success;
         }
