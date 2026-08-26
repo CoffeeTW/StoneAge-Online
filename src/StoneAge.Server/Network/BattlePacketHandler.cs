@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using StoneAge.Domain.Entities;
 using StoneAge.Game.Battle;
 using StoneAge.Game.Item;
+using StoneAge.Game.Pet;
 using StoneAge.Infrastructure.Persistence;
 using StoneAge.Network.Protocol;
 using StoneAge.Network.Server;
@@ -15,10 +16,13 @@ public sealed class BattlePacketHandler(
     IDbContextFactory<GameDbContext> dbFactory,
     BattleManager battles,
     ItemCatalog items,
+    PetSkillCatalog petSkills,
     ILogger<BattlePacketHandler> logger) : IClientPacketHandler
 {
     private const int MaxPetsPerCharacter = 5;
     private const int InventoryCapacity = 20;
+
+    private enum Actor : byte { Player, Pet, Monster }
 
     public async Task<bool> TryStartEncounterAsync(GameSession session, NetworkStream stream, int mapId, CancellationToken ct)
     {
@@ -32,6 +36,7 @@ public sealed class BattlePacketHandler(
             .Where(x => x.CharacterId == characterId && x.EquippedSlot != null)
             .ToListAsync(ct);
         var activePet = await db.CharacterPets.AsNoTracking()
+            .Include(x => x.Skills)
             .SingleOrDefaultAsync(x => x.CharacterId == characterId && x.IsActive, ct);
 
         var attack = character.Strength;
@@ -48,7 +53,8 @@ public sealed class BattlePacketHandler(
         BattlePetSnapshot? pet = activePet is null ? null : new BattlePetSnapshot(
             activePet.Id, activePet.Name, activePet.Level, activePet.Hp, activePet.MaxHp,
             activePet.Attack, activePet.Defense, activePet.Agility, activePet.Loyalty,
-            activePet.Earth, activePet.Water, activePet.Fire, activePet.Wind);
+            activePet.Earth, activePet.Water, activePet.Fire, activePet.Wind,
+            activePet.Skills.OrderBy(x => x.Slot).Select(x => (int?)x.SkillId).FirstOrDefault());
 
         var battle = battles.TryStart(
             characterId, mapId, character.Hp, attack, defense, agility,
@@ -89,9 +95,10 @@ public sealed class BattlePacketHandler(
         if (!battles.TryGet(characterId, out var battle) || battle is null)
             return;
 
-        var action = payload[0];
+        var action = payload[0]; // 1 Attack, 2 Defend, 3 Escape, 4 Capture
         if (action == 3 && TryEscape(battle))
         {
+            await PersistBattleHpAsync(characterId, battle, ct);
             battles.End(characterId);
             session.LeaveBattle();
             await SendBattleEndAsync(stream, 2, 0, 0, 0, 0, 0, 0, "Escaped.", ct);
@@ -109,41 +116,95 @@ public sealed class BattlePacketHandler(
         var playerDamage = 0;
         var petDamage = 0;
         var monsterDamage = 0;
+        var monsterTarget = (byte)0; // 0 none, 1 player, 2 pet
 
-        if (action == 1)
+        var initiative = new List<(Actor Actor, int Agility, int Tie)>
         {
-            playerDamage = CalculateDamage(
-                battle.PlayerAttack, battle.Monster.Defense,
-                battle.PlayerEarth, battle.PlayerWater, battle.PlayerFire, battle.PlayerWind,
-                battle.Monster.Earth, battle.Monster.Water, battle.Monster.Fire, battle.Monster.Wind);
-            battle.MonsterHp = Math.Max(0, battle.MonsterHp - playerDamage);
-        }
+            (Actor.Player, battle.PlayerAgility, Random.Shared.Next()) ,
+            (Actor.Monster, battle.Monster.Agility, Random.Shared.Next())
+        };
+        if (battle.Pet is not null && battle.PetHp > 0)
+            initiative.Add((Actor.Pet, battle.Pet.Agility, Random.Shared.Next()));
 
-        if (battle.MonsterHp > 0 && battle.Pet is not null && battle.PetHp > 0 && PetObeys(battle.Pet.Loyalty))
+        foreach (var entry in initiative.OrderByDescending(x => x.Agility).ThenByDescending(x => x.Tie))
         {
-            petDamage = CalculateDamage(
-                battle.Pet.Attack, battle.Monster.Defense,
-                battle.Pet.Earth, battle.Pet.Water, battle.Pet.Fire, battle.Pet.Wind,
-                battle.Monster.Earth, battle.Monster.Water, battle.Monster.Fire, battle.Monster.Wind);
-            battle.MonsterHp = Math.Max(0, battle.MonsterHp - petDamage);
+            if (battle.MonsterHp <= 0 || battle.PlayerHp <= 0)
+                break;
+
+            if (entry.Actor == Actor.Player)
+            {
+                if (action != 1) continue;
+                playerDamage = CalculateDamage(
+                    battle.PlayerAttack, battle.Monster.Defense,
+                    battle.PlayerEarth, battle.PlayerWater, battle.PlayerFire, battle.PlayerWind,
+                    battle.Monster.Earth, battle.Monster.Water, battle.Monster.Fire, battle.Monster.Wind);
+                battle.MonsterHp = Math.Max(0, battle.MonsterHp - playerDamage);
+                continue;
+            }
+
+            if (entry.Actor == Actor.Pet)
+            {
+                if (battle.Pet is null || battle.PetHp <= 0 || !PetObeys(battle.Pet.Loyalty)) continue;
+
+                var powerPercent = 100;
+                var aEarth = battle.Pet.Earth;
+                var aWater = battle.Pet.Water;
+                var aFire = battle.Pet.Fire;
+                var aWind = battle.Pet.Wind;
+                if (battle.Pet.PrimarySkillId is int skillId && petSkills.TryGet(skillId, out var skill) && skill is not null)
+                {
+                    powerPercent = Math.Clamp(skill.PowerPercent, 50, 250);
+                    ApplySkillElement(skill.Element, ref aEarth, ref aWater, ref aFire, ref aWind);
+                }
+
+                var baseDamage = CalculateDamage(
+                    battle.Pet.Attack, battle.Monster.Defense,
+                    aEarth, aWater, aFire, aWind,
+                    battle.Monster.Earth, battle.Monster.Water, battle.Monster.Fire, battle.Monster.Wind);
+                petDamage = Math.Max(1, baseDamage * powerPercent / 100);
+                battle.MonsterHp = Math.Max(0, battle.MonsterHp - petDamage);
+                continue;
+            }
+
+            if (battle.Pet is not null && battle.PetHp > 0 && Random.Shared.Next(100) < 35)
+            {
+                monsterTarget = 2;
+                monsterDamage = CalculateDamage(
+                    battle.Monster.Attack, battle.Pet.Defense,
+                    battle.Monster.Earth, battle.Monster.Water, battle.Monster.Fire, battle.Monster.Wind,
+                    battle.Pet.Earth, battle.Pet.Water, battle.Pet.Fire, battle.Pet.Wind);
+                battle.PetHp = Math.Max(0, battle.PetHp - monsterDamage);
+            }
+            else
+            {
+                monsterTarget = 1;
+                monsterDamage = CalculateDamage(
+                    battle.Monster.Attack, battle.PlayerDefense,
+                    battle.Monster.Earth, battle.Monster.Water, battle.Monster.Fire, battle.Monster.Wind,
+                    battle.PlayerEarth, battle.PlayerWater, battle.PlayerFire, battle.PlayerWind);
+                if (action == 2)
+                    monsterDamage = Math.Max(1, monsterDamage / 2);
+                battle.PlayerHp = Math.Max(0, battle.PlayerHp - monsterDamage);
+            }
         }
 
         var victory = battle.MonsterHp <= 0;
-        if (!victory)
-        {
-            monsterDamage = CalculateDamage(
-                battle.Monster.Attack, battle.PlayerDefense,
-                battle.Monster.Earth, battle.Monster.Water, battle.Monster.Fire, battle.Monster.Wind,
-                battle.PlayerEarth, battle.PlayerWater, battle.PlayerFire, battle.PlayerWind);
-            if (action == 2)
-                monsterDamage = Math.Max(1, monsterDamage / 2);
-            battle.PlayerHp = Math.Max(0, battle.PlayerHp - monsterDamage);
-        }
-
         var defeat = battle.PlayerHp <= 0;
+
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var character = await db.Characters.SingleAsync(x => x.Id == characterId, ct);
         character.Hp = defeat ? 1 : battle.PlayerHp;
+
+        CharacterPet? persistentPet = null;
+        if (battle.Pet is not null)
+        {
+            persistentPet = await db.CharacterPets.SingleOrDefaultAsync(x => x.Id == battle.Pet.Id && x.CharacterId == characterId, ct);
+            if (persistentPet is not null)
+            {
+                persistentPet.Hp = Math.Clamp(battle.PetHp, 0, persistentPet.MaxHp);
+                persistentPet.UpdatedAt = DateTimeOffset.UtcNow;
+            }
+        }
 
         var gainedExp = 0;
         var levelsGained = 0;
@@ -168,49 +229,37 @@ public sealed class BattlePacketHandler(
             character.Hp = Math.Min(character.Hp, character.MaxHp);
             droppedItemId = await TryGrantDropAsync(db, characterId, battle.Monster, ct);
 
-            if (battle.Pet is not null)
+            if (persistentPet is not null && persistentPet.Hp > 0)
             {
-                var pet = await db.CharacterPets.SingleOrDefaultAsync(x => x.Id == battle.Pet.Id && x.CharacterId == characterId, ct);
-                if (pet is not null)
+                persistentPet.Experience = checked(persistentPet.Experience + gainedExp);
+                while (persistentPet.Experience >= PetExperienceForNextLevel(persistentPet.Level))
                 {
-                    pet.Experience = checked(pet.Experience + gainedExp);
-                    while (pet.Experience >= PetExperienceForNextLevel(pet.Level))
-                    {
-                        pet.Experience -= PetExperienceForNextLevel(pet.Level);
-                        pet.Level++;
-                        pet.MaxHp += 6;
-                        pet.Hp = pet.MaxHp;
-                        pet.Attack += 2;
-                        pet.Defense += 1;
-                        pet.Agility += 1;
-                        petLevelsGained++;
-                    }
-                    pet.Loyalty = Math.Min(100, pet.Loyalty + 1);
-                    pet.UpdatedAt = DateTimeOffset.UtcNow;
+                    persistentPet.Experience -= PetExperienceForNextLevel(persistentPet.Level);
+                    persistentPet.Level++;
+                    persistentPet.MaxHp += 6;
+                    persistentPet.Hp = persistentPet.MaxHp;
+                    persistentPet.Attack += 2;
+                    persistentPet.Defense += 1;
+                    persistentPet.Agility += 1;
+                    petLevelsGained++;
                 }
+                persistentPet.Loyalty = Math.Min(100, persistentPet.Loyalty + 1);
             }
         }
 
         character.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
-        await SendTurnResultAsync(stream, battle, action, playerDamage, petDamage, monsterDamage, victory, defeat, ct);
+        await SendTurnResultAsync(stream, battle, action, playerDamage, petDamage, monsterDamage, monsterTarget, victory, defeat, ct);
 
         if (victory || defeat)
         {
             battles.End(characterId);
             session.LeaveBattle();
             await SendBattleEndAsync(
-                stream,
-                victory ? (byte)1 : (byte)0,
-                gainedExp,
-                levelsGained,
-                character.Level,
-                character.Experience,
-                droppedItemId,
-                petLevelsGained,
-                victory ? "Victory." : "Defeat.",
-                ct);
-            logger.LogInformation("Battle ended CharacterId={CharacterId} Victory={Victory} Level={Level} PetLevels={PetLevels}", characterId, victory, character.Level, petLevelsGained);
+                stream, victory ? (byte)1 : (byte)0, gainedExp, levelsGained,
+                character.Level, character.Experience, droppedItemId, petLevelsGained,
+                victory ? "Victory." : "Defeat.", ct);
+            logger.LogInformation("Battle ended CharacterId={CharacterId} Victory={Victory} PetHp={PetHp}", characterId, victory, battle.PetHp);
         }
         else
         {
@@ -218,17 +267,40 @@ public sealed class BattlePacketHandler(
         }
     }
 
-    private static bool PetObeys(int loyalty)
+    private async Task PersistBattleHpAsync(long characterId, BattleSession battle, CancellationToken ct)
     {
-        var chance = Math.Clamp(50 + loyalty / 2, 50, 100);
-        return Random.Shared.Next(100) < chance;
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var character = await db.Characters.SingleAsync(x => x.Id == characterId, ct);
+        character.Hp = Math.Max(1, battle.PlayerHp);
+        character.UpdatedAt = DateTimeOffset.UtcNow;
+        if (battle.Pet is not null)
+        {
+            var pet = await db.CharacterPets.SingleOrDefaultAsync(x => x.Id == battle.Pet.Id && x.CharacterId == characterId, ct);
+            if (pet is not null)
+            {
+                pet.Hp = Math.Clamp(battle.PetHp, 0, pet.MaxHp);
+                pet.UpdatedAt = DateTimeOffset.UtcNow;
+            }
+        }
+        await db.SaveChangesAsync(ct);
     }
 
-    private static bool TryEscape(BattleSession battle)
+    private static void ApplySkillElement(string element, ref byte earth, ref byte water, ref byte fire, ref byte wind)
     {
-        var chance = 55 + Math.Clamp(battle.PlayerAgility - battle.Monster.Agility, -20, 20);
-        return Random.Shared.Next(100) < chance;
+        switch (element.Trim().ToLowerInvariant())
+        {
+            case "earth": earth = 100; water = fire = wind = 0; break;
+            case "water": water = 100; earth = fire = wind = 0; break;
+            case "fire": fire = 100; earth = water = wind = 0; break;
+            case "wind": wind = 100; earth = water = fire = 0; break;
+        }
     }
+
+    private static bool PetObeys(int loyalty)
+        => Random.Shared.Next(100) < Math.Clamp(50 + loyalty / 2, 50, 100);
+
+    private static bool TryEscape(BattleSession battle)
+        => Random.Shared.Next(100) < 55 + Math.Clamp(battle.PlayerAgility - battle.Monster.Agility, -20, 20);
 
     private async Task<bool> TryCaptureAsync(long characterId, BattleSession battle, CancellationToken ct)
     {
@@ -245,7 +317,7 @@ public sealed class BattlePacketHandler(
             return false;
 
         var monster = battle.Monster;
-        db.CharacterPets.Add(new CharacterPet
+        var pet = new CharacterPet
         {
             CharacterId = characterId,
             MonsterId = monster.Id,
@@ -260,8 +332,10 @@ public sealed class BattlePacketHandler(
             Earth = monster.Earth,
             Water = monster.Water,
             Fire = monster.Fire,
-            Wind = monster.Wind
-        });
+            Wind = monster.Wind,
+            Skills = [new CharacterPetSkill { Slot = 0, SkillId = 40001 }]
+        };
+        db.CharacterPets.Add(pet);
         await db.SaveChangesAsync(ct);
         return true;
     }
@@ -330,28 +404,31 @@ public sealed class BattlePacketHandler(
             writer.Write(battle.PetHp);
             writer.Write(battle.Pet.MaxHp);
             writer.Write(battle.Pet.Loyalty);
+            writer.Write(battle.Pet.PrimarySkillId ?? 0);
         }
         await stream.WriteAsync(PacketCodec.Encode(Opcode.BattleStart, ms.ToArray()), ct);
     }
 
-    private static async Task SendTurnResultAsync(NetworkStream stream, BattleSession battle, byte action, int playerDamage, int petDamage, int monsterDamage, bool victory, bool defeat, CancellationToken ct)
+    private static async Task SendTurnResultAsync(NetworkStream stream, BattleSession battle, byte action, int playerDamage, int petDamage, int monsterDamage, byte monsterTarget, bool victory, bool defeat, CancellationToken ct)
     {
-        var payload = new byte[23];
+        var payload = new byte[28];
         payload[0] = action;
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(1, 4), playerDamage);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(5, 4), petDamage);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(9, 4), monsterDamage);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(13, 4), battle.PlayerHp);
-        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(17, 4), battle.MonsterHp);
-        payload[21] = victory ? (byte)1 : (byte)0;
-        payload[22] = defeat ? (byte)1 : (byte)0;
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(17, 4), battle.PetHp);
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(21, 4), battle.MonsterHp);
+        payload[25] = monsterTarget;
+        payload[26] = victory ? (byte)1 : (byte)0;
+        payload[27] = defeat ? (byte)1 : (byte)0;
         await stream.WriteAsync(PacketCodec.Encode(Opcode.BattleTurnResult, payload), ct);
     }
 
     private static async Task SendBattleEndAsync(NetworkStream stream, byte result, int exp, int levelsGained, int level, long remainingExp, int rewardId, int petLevelsGained, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
-        var payload = new byte[1 + 4 + 4 + 4 + 8 + 4 + 4 + 2 + messageBytes.Length];
+        var payload = new byte[31 + messageBytes.Length];
         payload[0] = result;
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(1, 4), exp);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(5, 4), levelsGained);
