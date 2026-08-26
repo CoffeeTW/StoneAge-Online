@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Net.Sockets;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using StoneAge.Infrastructure.Persistence;
@@ -14,20 +13,21 @@ public sealed class LoginPacketHandler(
     Pbkdf2PasswordHasher passwordHasher,
     ILogger<LoginPacketHandler> logger) : IClientPacketHandler
 {
-    public async Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken cancellationToken)
+    public async Task HandleAsync(ClientConnection connection, PacketFrame packet, CancellationToken cancellationToken)
     {
+        var session = connection.Session;
         if (packet.Opcode != Opcode.LoginRequest)
             return;
 
         if (session.IsAuthenticated)
         {
-            await SendLoginResponseAsync(stream, false, 0, "Already authenticated.", cancellationToken);
+            await SendLoginResponseAsync(connection, false, 0, "Already authenticated.", cancellationToken);
             return;
         }
 
         if (!TryReadLogin(packet.Payload, out var username, out var password))
         {
-            await SendLoginResponseAsync(stream, false, 0, "Invalid login packet.", cancellationToken);
+            await SendLoginResponseAsync(connection, false, 0, "Invalid login packet.", cancellationToken);
             return;
         }
 
@@ -37,7 +37,7 @@ public sealed class LoginPacketHandler(
         if (account is null || account.Status != 0 || !passwordHasher.Verify(password, account.PasswordHash))
         {
             logger.LogWarning("Login failed for {Username}", username);
-            await SendLoginResponseAsync(stream, false, 0, "Invalid username or password.", cancellationToken);
+            await SendLoginResponseAsync(connection, false, 0, "Invalid username or password.", cancellationToken);
             return;
         }
 
@@ -46,7 +46,7 @@ public sealed class LoginPacketHandler(
         await db.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation("Login success AccountId={AccountId} SessionId={SessionId}", account.Id, session.SessionId);
-        await SendLoginResponseAsync(stream, true, account.Id, "Login successful.", cancellationToken);
+        await SendLoginResponseAsync(connection, true, account.Id, "Login successful.", cancellationToken);
     }
 
     private static bool TryReadLogin(byte[] payload, out string username, out string password)
@@ -76,7 +76,7 @@ public sealed class LoginPacketHandler(
     }
 
     private static Task SendLoginResponseAsync(
-        NetworkStream stream,
+        ClientConnection connection,
         bool success,
         long accountId,
         string message,
@@ -88,7 +88,6 @@ public sealed class LoginPacketHandler(
         BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(1, 8), accountId);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(9, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(11));
-
-        return ConnectionSendGate.SendPacketAsync(stream, Opcode.LoginResponse, payload, cancellationToken);
+        return connection.SendAsync(Opcode.LoginResponse, payload, cancellationToken);
     }
 }
