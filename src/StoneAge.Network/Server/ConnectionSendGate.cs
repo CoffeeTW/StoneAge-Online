@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using StoneAge.Network.Protocol;
 
 namespace StoneAge.Network.Server;
 
@@ -11,6 +12,13 @@ public static class ConnectionSendGate
     }
 
     private static readonly ConditionalWeakTable<NetworkStream, Gate> Gates = new();
+
+    public static Task SendPacketAsync(
+        NetworkStream stream,
+        Opcode opcode,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken)
+        => SendAsync(stream, PacketCodec.Encode(opcode, payload.Span), cancellationToken);
 
     public static async Task SendAsync(NetworkStream stream, ReadOnlyMemory<byte> packet, CancellationToken cancellationToken)
     {
