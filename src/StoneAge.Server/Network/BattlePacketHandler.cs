@@ -187,6 +187,15 @@ public sealed class BattlePacketHandler(
                 var aWind = battle.Pet.Wind;
                 if (battle.SelectedPetSkillId is int skillId && petSkills.TryGet(skillId, out var skill) && skill is not null)
                 {
+                    if (skill.Effect.Equals("heal_self", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var healPercent = Math.Clamp(skill.EffectPower, 1, 100);
+                        var healAmount = Math.Max(1, battle.Pet.MaxHp * healPercent / 100);
+                        battle.PetHp = Math.Min(battle.Pet.MaxHp, battle.PetHp + healAmount);
+                        logger.LogDebug("Pet self-heal CharacterId={CharacterId} PetId={PetId} SkillId={SkillId} Amount={Amount}", characterId, battle.Pet.Id, skill.Id, healAmount);
+                        continue;
+                    }
+
                     powerPercent = Math.Clamp(skill.PowerPercent, 50, 250);
                     ApplySkillElement(skill.Element, ref aEarth, ref aWater, ref aFire, ref aWind);
                 }
