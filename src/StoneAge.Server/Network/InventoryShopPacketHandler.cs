@@ -58,14 +58,14 @@ public sealed class InventoryShopPacketHandler(
             writer.Write(row.Slot);
             writer.Write(row.EquippedSlot ?? (byte)0);
         }
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.InventoryListResponse, ms.ToArray()), ct);
+        await ConnectionSendGate.SendPacketAsync(stream, Opcode.InventoryListResponse, ms.ToArray(), ct);
     }
 
     private async Task SendShopListAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
     {
         if (!TryReadNpc(payload, out var npcId) || !CanUseShop(characterId, npcId))
         {
-            await stream.WriteAsync(PacketCodec.Encode(Opcode.ShopListResponse, new byte[] { 0, 0 }), ct);
+            await ConnectionSendGate.SendPacketAsync(stream, Opcode.ShopListResponse, new byte[] { 0, 0 }, ct);
             return;
         }
 
@@ -81,7 +81,7 @@ public sealed class InventoryShopPacketHandler(
             writer.Write(item.MaxStack);
             WriteString(writer, item.Type);
         }
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.ShopListResponse, ms.ToArray()), ct);
+        await ConnectionSendGate.SendPacketAsync(stream, Opcode.ShopListResponse, ms.ToArray(), ct);
     }
 
     private async Task BuyAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
@@ -223,14 +223,14 @@ public sealed class InventoryShopPacketHandler(
         return true;
     }
 
-    private static async Task SendTradeResultAsync(NetworkStream stream, Opcode opcode, bool success, string message, CancellationToken ct)
+    private static Task SendTradeResultAsync(NetworkStream stream, Opcode opcode, bool success, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 2 + messageBytes.Length];
         payload[0] = success ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(1, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(3));
-        await stream.WriteAsync(PacketCodec.Encode(opcode, payload), ct);
+        return ConnectionSendGate.SendPacketAsync(stream, opcode, payload, ct);
     }
 
     private static void WriteString(BinaryWriter writer, string value)

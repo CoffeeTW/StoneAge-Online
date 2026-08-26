@@ -60,7 +60,7 @@ public sealed class PetPacketHandler(
             writer.Write(pet.IsActive ? (byte)1 : (byte)0);
         }
 
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.PetListResponse, ms.ToArray()), ct);
+        await ConnectionSendGate.SendPacketAsync(stream, Opcode.PetListResponse, ms.ToArray(), ct);
     }
 
     private async Task ActivateAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
@@ -163,14 +163,14 @@ public sealed class PetPacketHandler(
         return petId > 0;
     }
 
-    private static async Task SendResultAsync(NetworkStream stream, Opcode opcode, bool success, string message, CancellationToken ct)
+    private static Task SendResultAsync(NetworkStream stream, Opcode opcode, bool success, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 2 + messageBytes.Length];
         payload[0] = success ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(1, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(3));
-        await stream.WriteAsync(PacketCodec.Encode(opcode, payload), ct);
+        return ConnectionSendGate.SendPacketAsync(stream, opcode, payload, ct);
     }
 
     private static void WriteString(BinaryWriter writer, string value)

@@ -89,6 +89,7 @@ public sealed class BattleSession
         PlayerWind = wind;
         Pet = pet;
         PetHp = pet?.Hp ?? 0;
+        SelectedPetSkillId = pet?.PrimarySkillId;
         MonsterHp = monster.MaxHp;
     }
 
@@ -104,6 +105,7 @@ public sealed class BattleSession
     public byte PlayerWind { get; }
     public BattlePetSnapshot? Pet { get; }
     public int PetHp { get; set; }
+    public int? SelectedPetSkillId { get; set; }
     public int MonsterHp { get; set; }
     public int Turn { get; set; } = 1;
 }

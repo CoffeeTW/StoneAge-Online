@@ -46,7 +46,7 @@ public sealed class NpcPacketHandler(
             WriteString(writer, npc.Type);
         }
 
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.NpcListResponse, ms.ToArray()), cancellationToken);
+        await ConnectionSendGate.SendPacketAsync(stream, Opcode.NpcListResponse, ms.ToArray(), cancellationToken);
     }
 
     private async Task InteractAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken cancellationToken)
@@ -97,17 +97,17 @@ public sealed class NpcPacketHandler(
         await SendWarpAsync(stream, true, player, "Warped.", cancellationToken);
     }
 
-    private static async Task SendDialogueAsync(NetworkStream stream, int npcId, bool success, string text, CancellationToken cancellationToken)
+    private static Task SendDialogueAsync(NetworkStream stream, int npcId, bool success, string text, CancellationToken cancellationToken)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
         writer.Write(success ? (byte)1 : (byte)0);
         writer.Write(npcId);
         WriteString(writer, text);
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.NpcDialogueResponse, ms.ToArray()), cancellationToken);
+        return ConnectionSendGate.SendPacketAsync(stream, Opcode.NpcDialogueResponse, ms.ToArray(), cancellationToken);
     }
 
-    private static async Task SendWarpAsync(NetworkStream stream, bool success, PlayerRuntime player, string message, CancellationToken cancellationToken)
+    private static Task SendWarpAsync(NetworkStream stream, bool success, PlayerRuntime player, string message, CancellationToken cancellationToken)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
@@ -117,7 +117,7 @@ public sealed class NpcPacketHandler(
         writer.Write(player.Y);
         writer.Write(player.Direction);
         WriteString(writer, message);
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.NpcWarpResponse, ms.ToArray()), cancellationToken);
+        return ConnectionSendGate.SendPacketAsync(stream, Opcode.NpcWarpResponse, ms.ToArray(), cancellationToken);
     }
 
     private static byte[] BuildEnterPacket(PlayerRuntime player)

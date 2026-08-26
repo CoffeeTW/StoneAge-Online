@@ -6,7 +6,7 @@ using StoneAge.Network.Protocol;
 const string host = "127.0.0.1";
 const int port = 7021;
 
-Console.WriteLine("StoneAge Online TestClient v0.1-11");
+Console.WriteLine("StoneAge Online TestClient v0.1-13");
 Console.WriteLine($"Connecting to {host}:{port} ...");
 
 using var client = new TcpClient();
@@ -27,8 +27,9 @@ PrintPacket(login);
 if (login.Opcode != Opcode.LoginResponse || login.Payload.Length < 1 || login.Payload[0] != 1) return;
 
 Console.WriteLine("Commands: chars | create <name> | select <id> | enter | move <x> <y> <dir> | recv");
-Console.WriteLine("Battle: attack | defend | escape | capture");
-Console.WriteLine("Pets: pets | petactive <id> | petname <id> <name> | petrelease <id> | quit");
+Console.WriteLine("Battle: attack | defend | escape | capture | petskill <slot>");
+Console.WriteLine("Pets: pets | petactive <id> | petname <id> <name> | petrelease <id>");
+Console.WriteLine("Pet skills: petskills <petId> | petlearn <petId> <skillId> <slot> | petforget <petId> <slot> | quit");
 
 while (true)
 {
@@ -105,6 +106,13 @@ while (true)
         continue;
     }
 
+    if (input.StartsWith("petskill ", StringComparison.OrdinalIgnoreCase) && byte.TryParse(input[9..], out var battlePetSkillSlot))
+    {
+        await stream.WriteAsync(PacketCodec.Encode(Opcode.BattlePetSkillSelectRequest, new[] { battlePetSkillSlot }));
+        PrintPacket(await ReadPacketAsync(stream));
+        continue;
+    }
+
     if (input.Equals("pets", StringComparison.OrdinalIgnoreCase))
     {
         await stream.WriteAsync(PacketCodec.Encode(Opcode.PetListRequest, ReadOnlySpan<byte>.Empty));
@@ -142,6 +150,42 @@ while (true)
         continue;
     }
 
+    if (input.StartsWith("petskills ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[10..], out var skillPetId))
+    {
+        await SendInt64Async(stream, Opcode.PetSkillListRequest, skillPetId);
+        PrintPacket(await ReadPacketAsync(stream));
+        continue;
+    }
+
+    if (input.StartsWith("petlearn ", StringComparison.OrdinalIgnoreCase))
+    {
+        var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 4 && long.TryParse(parts[1], out var learnPetId) && int.TryParse(parts[2], out var skillId) && byte.TryParse(parts[3], out var slot))
+        {
+            var payload = new byte[13];
+            BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(0, 8), learnPetId);
+            BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(8, 4), skillId);
+            payload[12] = slot;
+            await stream.WriteAsync(PacketCodec.Encode(Opcode.PetSkillLearnRequest, payload));
+            PrintPacket(await ReadPacketAsync(stream));
+        }
+        continue;
+    }
+
+    if (input.StartsWith("petforget ", StringComparison.OrdinalIgnoreCase))
+    {
+        var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 3 && long.TryParse(parts[1], out var forgetPetId) && byte.TryParse(parts[2], out var slot))
+        {
+            var payload = new byte[9];
+            BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(0, 8), forgetPetId);
+            payload[8] = slot;
+            await stream.WriteAsync(PacketCodec.Encode(Opcode.PetSkillForgetRequest, payload));
+            PrintPacket(await ReadPacketAsync(stream));
+        }
+        continue;
+    }
+
     Console.WriteLine("Unknown command.");
 }
 
@@ -159,10 +203,14 @@ static void PrintPacket(PacketFrame packet)
         Console.WriteLine(Encoding.UTF8.GetString(packet.Payload));
     else if (packet.Opcode is Opcode.LoginResponse or Opcode.CharacterCreateResponse or Opcode.CharacterSelectResponse)
         PrintLegacyResult(packet.Payload);
-    else if (packet.Opcode is Opcode.PetActivateResponse or Opcode.PetRenameResponse or Opcode.PetReleaseResponse)
+    else if (packet.Opcode is Opcode.PetActivateResponse or Opcode.PetRenameResponse or Opcode.PetReleaseResponse or Opcode.PetSkillLearnResponse or Opcode.PetSkillForgetResponse)
         PrintSimpleResult(packet.Payload);
+    else if (packet.Opcode == Opcode.BattlePetSkillSelectResponse)
+        PrintBattlePetSkillResult(packet.Payload);
     else if (packet.Opcode == Opcode.PetListResponse)
         PrintPets(packet.Payload);
+    else if (packet.Opcode == Opcode.PetSkillListResponse)
+        PrintPetSkills(packet.Payload);
     else if (packet.Opcode == Opcode.BattleStart)
         PrintBattleStart(packet.Payload);
     else if (packet.Opcode == Opcode.BattleTurnResult)
@@ -195,6 +243,43 @@ static void PrintPets(byte[] payload)
     }
 }
 
+static void PrintPetSkills(byte[] payload)
+{
+    if (payload.Length < 3)
+        return;
+
+    if (payload[0] != 1)
+    {
+        PrintSimpleResult(payload);
+        return;
+    }
+
+    var offset = 1;
+    var petId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
+    var count = payload[offset++];
+    Console.WriteLine($"Pet #{petId} skills ({count}):");
+    for (var i = 0; i < count; i++)
+    {
+        var slot = payload[offset++];
+        var skillId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
+        var name = ReadString(payload, ref offset);
+        var power = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
+        var element = ReadString(payload, ref offset);
+        Console.WriteLine($"  Slot {slot}: {name} (SkillId={skillId}, Power={power}%, Element={element})");
+    }
+}
+
+static void PrintBattlePetSkillResult(byte[] payload)
+{
+    if (payload.Length < 8) return;
+    var success = payload[0] == 1;
+    var slot = payload[1];
+    var skillId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(2, 4));
+    var len = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(6, 2));
+    var message = payload.Length >= 8 + len ? Encoding.UTF8.GetString(payload, 8, len) : string.Empty;
+    Console.WriteLine($"{(success ? "OK" : "FAIL")} PetSkill Slot={slot} SkillId={skillId} {message}");
+}
+
 static void PrintBattleStart(byte[] payload)
 {
     var offset = 0;
@@ -214,14 +299,15 @@ static void PrintBattleStart(byte[] payload)
         var petLevel = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
         var petHp = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
         var petMaxHp = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
-        var loyalty = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4));
-        Console.WriteLine($"PET: {petName}#{petId} Lv.{petLevel} HP={petHp}/{petMaxHp} Loyalty={loyalty}");
+        var loyalty = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
+        var selectedSkillId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4));
+        Console.WriteLine($"PET: {petName}#{petId} Lv.{petLevel} HP={petHp}/{petMaxHp} Loyalty={loyalty} SelectedSkill={selectedSkillId}");
     }
 }
 
 static void PrintBattleTurn(byte[] payload)
 {
-    Console.WriteLine($"Action={payload[0]} PlayerDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(1,4))} PetDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(5,4))} MonsterDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(9,4))} PlayerHP={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(13,4))} MonsterHP={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(17,4))}");
+    Console.WriteLine($"Action={payload[0]} PlayerDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(1,4))} PetDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(5,4))} MonsterDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(9,4))} PlayerHP={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(13,4))} PetHP={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(17,4))} MonsterHP={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(21,4))}");
 }
 
 static void PrintBattleEnd(byte[] payload)

@@ -158,7 +158,7 @@ public sealed class WorldPacketHandler(
         return PacketCodec.Encode(Opcode.MoveBroadcast, payload);
     }
 
-    private static async Task SendEnterWorldResponseAsync(NetworkStream stream, bool success, PlayerRuntime? player, string message, CancellationToken cancellationToken)
+    private static Task SendEnterWorldResponseAsync(NetworkStream stream, bool success, PlayerRuntime? player, string message, CancellationToken cancellationToken)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
@@ -171,6 +171,6 @@ public sealed class WorldPacketHandler(
         var messageBytes = Encoding.UTF8.GetBytes(message);
         writer.Write(checked((ushort)messageBytes.Length));
         writer.Write(messageBytes);
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.EnterWorld, ms.ToArray()), cancellationToken);
+        return ConnectionSendGate.SendPacketAsync(stream, Opcode.EnterWorld, ms.ToArray(), cancellationToken);
     }
 }
