@@ -61,6 +61,7 @@ internal sealed class AsyncPacketClient : IAsyncDisposable
                     continue;
                 }
 
+                PartyBattleConsole.TryPrint(packet);
                 UnsolicitedPacket?.Invoke(packet);
             }
         }

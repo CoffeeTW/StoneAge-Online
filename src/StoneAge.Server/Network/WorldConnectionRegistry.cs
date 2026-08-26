@@ -13,6 +13,9 @@ public sealed class WorldConnectionRegistry
     public void Unregister(long characterId)
         => _peers.TryRemove(characterId, out _);
 
+    public bool TryGetConnection(long characterId, out ClientConnection? connection)
+        => _peers.TryGetValue(characterId, out connection);
+
     public async Task SendAsync(long characterId, byte[] packet, CancellationToken cancellationToken)
     {
         if (!_peers.TryGetValue(characterId, out var connection))

@@ -11,6 +11,7 @@ public sealed class CompositePacketHandler(
     InventoryShopPacketHandler inventoryShopHandler,
     ItemEquipmentPacketHandler itemEquipmentHandler,
     BattlePacketHandler battleHandler,
+    PartyBattlePacketHandler partyBattleHandler,
     PetPacketHandler petHandler,
     PetSkillPacketHandler petSkillHandler,
     SocialPacketHandler socialHandler,
@@ -26,7 +27,9 @@ public sealed class CompositePacketHandler(
             Opcode.NpcListRequest or Opcode.NpcInteractRequest => npcHandler.HandleAsync(connection, packet, cancellationToken),
             Opcode.InventoryListRequest or Opcode.ShopListRequest or Opcode.ShopBuyRequest or Opcode.ShopSellRequest => inventoryShopHandler.HandleAsync(connection, packet, cancellationToken),
             Opcode.ItemUseRequest or Opcode.EquipmentListRequest or Opcode.ItemEquipRequest or Opcode.ItemUnequipRequest => itemEquipmentHandler.HandleAsync(connection, packet, cancellationToken),
-            Opcode.BattleActionRequest or Opcode.BattlePetSkillSelectRequest => battleHandler.HandleAsync(connection, packet, cancellationToken),
+            Opcode.BattleActionRequest => HandleBattleActionAsync(connection, packet, cancellationToken),
+            Opcode.BattlePetSkillSelectRequest => battleHandler.HandleAsync(connection, packet, cancellationToken),
+            Opcode.PartyBattleActionRequest => partyBattleHandler.HandleAsync(connection, packet, cancellationToken),
             Opcode.PetListRequest or Opcode.PetActivateRequest or Opcode.PetRenameRequest or Opcode.PetReleaseRequest or Opcode.PetHealRequest or Opcode.PetReviveRequest => petHandler.HandleAsync(connection, packet, cancellationToken),
             Opcode.PetSkillListRequest or Opcode.PetSkillLearnRequest or Opcode.PetSkillForgetRequest => petSkillHandler.HandleAsync(connection, packet, cancellationToken),
             Opcode.ChatSayRequest or Opcode.PartyInviteRequest or Opcode.PartyAnswerRequest or Opcode.PartyLeaveRequest or
@@ -39,9 +42,18 @@ public sealed class CompositePacketHandler(
     public async Task OnDisconnectedAsync(ClientConnection connection, CancellationToken cancellationToken)
     {
         var characterId = connection.Session.CharacterId;
-        await worldHandler.DisconnectAsync(connection.Session);
         if (characterId is long id)
-            await socialHandler.OnDisconnectedAsync(id, cancellationToken);
+            await partyBattleHandler.DisconnectAsync(id, cancellationToken);
+        await worldHandler.DisconnectAsync(connection.Session);
+        if (characterId is long socialId)
+            await socialHandler.OnDisconnectedAsync(socialId, cancellationToken);
+    }
+
+    private Task HandleBattleActionAsync(ClientConnection connection, PacketFrame packet, CancellationToken cancellationToken)
+    {
+        if (connection.Session.CharacterId is long characterId && partyBattleHandler.IsInBattle(characterId))
+            return partyBattleHandler.HandleAsync(connection, packet, cancellationToken);
+        return battleHandler.HandleAsync(connection, packet, cancellationToken);
     }
 
     private Task HandleUnknownAsync(GameSession session, PacketFrame packet)

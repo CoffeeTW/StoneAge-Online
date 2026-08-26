@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
-using StoneAge.Game.Battle;
 using StoneAge.Game.Party;
 using StoneAge.Game.World;
 using StoneAge.Infrastructure.Persistence;
@@ -15,8 +14,8 @@ public sealed class WorldPacketHandler(
     WorldManager world,
     WorldConnectionRegistry connections,
     PartyManager parties,
-    BattleManager battles,
     BattlePacketHandler battleHandler,
+    PartyBattlePacketHandler partyBattleHandler,
     ILogger<WorldPacketHandler> logger) : IClientPacketHandler
 {
     private sealed record FollowPosition(long CharacterId, int MapId, short X, short Y, byte Direction);
@@ -141,12 +140,19 @@ public sealed class WorldPacketHandler(
         await ApplyFollowChainAsync(followChain, cancellationToken);
 
         var party = parties.GetParty(characterId);
-        if (party is not null && party.LeaderId == characterId)
+        if (party is not null)
         {
+            if (party.LeaderId != characterId)
+                return;
+
             var encounterMembers = party.MemberIds
                 .Where(id => world.TryGetPlayer(id, out var member) && member is not null && member.MapId == player.MapId)
                 .ToArray();
-            battles.PrepareParticipantRoster(characterId, encounterMembers);
+            if (encounterMembers.Length >= 2)
+            {
+                await partyBattleHandler.TryStartEncounterAsync(player.MapId, encounterMembers, cancellationToken);
+                return;
+            }
         }
 
         await battleHandler.TryStartEncounterAsync(connection, player.MapId, cancellationToken);
