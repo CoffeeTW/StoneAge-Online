@@ -65,5 +65,15 @@ public enum Opcode : ushort
     PetHealRequest = 0x090F,
     PetHealResponse = 0x0910,
     PetReviveRequest = 0x0911,
-    PetReviveResponse = 0x0912
+    PetReviveResponse = 0x0912,
+    ChatSayRequest = 0x0A01,
+    ChatSayBroadcast = 0x0A02,
+    PartyInviteRequest = 0x0B01,
+    PartyInviteResponse = 0x0B02,
+    PartyInviteNotification = 0x0B03,
+    PartyAnswerRequest = 0x0B04,
+    PartyAnswerResponse = 0x0B05,
+    PartyStateBroadcast = 0x0B06,
+    PartyLeaveRequest = 0x0B07,
+    PartyLeaveResponse = 0x0B08
 }

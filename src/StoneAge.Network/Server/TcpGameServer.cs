@@ -43,7 +43,7 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
 
         try
         {
-            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-15");
+            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-16");
             await connection.SendAsync(Opcode.Hello, helloPayload, cancellationToken);
 
             while (!cancellationToken.IsCancellationRequested)
