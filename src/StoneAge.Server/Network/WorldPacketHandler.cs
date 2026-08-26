@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Net.Sockets;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using StoneAge.Game.World;
@@ -25,9 +24,6 @@ public sealed class WorldPacketHandler(
             _ => Task.CompletedTask
         };
     }
-
-    public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken cancellationToken)
-        => throw new NotSupportedException("WorldPacketHandler requires ClientConnection.");
 
     public async Task DisconnectAsync(GameSession session)
     {
@@ -139,7 +135,7 @@ public sealed class WorldPacketHandler(
         foreach (var other in world.GetPlayersInMap(player.MapId))
             await connections.SendAsync(other.CharacterId, packet, cancellationToken);
 
-        await battleHandler.TryStartEncounterAsync(session, connection.Stream, player.MapId, cancellationToken);
+        await battleHandler.TryStartEncounterAsync(connection, player.MapId, cancellationToken);
     }
 
     private static Task SendMoveResponseAsync(ClientConnection connection, MoveResult result, PlayerRuntime? player, CancellationToken cancellationToken)

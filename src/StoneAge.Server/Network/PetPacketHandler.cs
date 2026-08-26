@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Net.Sockets;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using StoneAge.Infrastructure.Persistence;
@@ -12,23 +11,26 @@ public sealed class PetPacketHandler(
     IDbContextFactory<GameDbContext> dbFactory,
     ILogger<PetPacketHandler> logger) : IClientPacketHandler
 {
-    public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken ct)
+    public Task HandleAsync(ClientConnection connection, PacketFrame packet, CancellationToken ct)
     {
+        var session = connection.Session;
         if (session.State != SessionState.InWorld || session.CharacterId is null)
             return Task.CompletedTask;
 
         var characterId = session.CharacterId.Value;
         return packet.Opcode switch
         {
-            Opcode.PetListRequest => SendListAsync(characterId, stream, ct),
-            Opcode.PetActivateRequest => ActivateAsync(characterId, packet.Payload, stream, ct),
-            Opcode.PetRenameRequest => RenameAsync(characterId, packet.Payload, stream, ct),
-            Opcode.PetReleaseRequest => ReleaseAsync(characterId, packet.Payload, stream, ct),
+            Opcode.PetListRequest => SendListAsync(characterId, connection, ct),
+            Opcode.PetActivateRequest => ActivateAsync(characterId, packet.Payload, connection, ct),
+            Opcode.PetRenameRequest => RenameAsync(characterId, packet.Payload, connection, ct),
+            Opcode.PetReleaseRequest => ReleaseAsync(characterId, packet.Payload, connection, ct),
+            Opcode.PetHealRequest => HealAsync(characterId, packet.Payload, connection, ct),
+            Opcode.PetReviveRequest => ReviveAsync(characterId, packet.Payload, connection, ct),
             _ => Task.CompletedTask
         };
     }
 
-    private async Task SendListAsync(long characterId, NetworkStream stream, CancellationToken ct)
+    private async Task SendListAsync(long characterId, ClientConnection connection, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var pets = await db.CharacterPets.AsNoTracking()
@@ -60,14 +62,14 @@ public sealed class PetPacketHandler(
             writer.Write(pet.IsActive ? (byte)1 : (byte)0);
         }
 
-        await ConnectionSendGate.SendPacketAsync(stream, Opcode.PetListResponse, ms.ToArray(), ct);
+        await connection.SendAsync(Opcode.PetListResponse, ms.ToArray(), ct);
     }
 
-    private async Task ActivateAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task ActivateAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
     {
         if (!TryReadPetId(payload, out var petId))
         {
-            await SendResultAsync(stream, Opcode.PetActivateResponse, false, "Invalid pet.", ct);
+            await SendResultAsync(connection, Opcode.PetActivateResponse, false, "Invalid pet.", ct);
             return;
         }
 
@@ -76,7 +78,7 @@ public sealed class PetPacketHandler(
         var selected = await db.CharacterPets.SingleOrDefaultAsync(x => x.Id == petId && x.CharacterId == characterId, ct);
         if (selected is null)
         {
-            await SendResultAsync(stream, Opcode.PetActivateResponse, false, "Pet not found.", ct);
+            await SendResultAsync(connection, Opcode.PetActivateResponse, false, "Pet not found.", ct);
             return;
         }
 
@@ -93,14 +95,14 @@ public sealed class PetPacketHandler(
         await tx.CommitAsync(ct);
 
         logger.LogInformation("Active pet changed CharacterId={CharacterId} PetId={PetId}", characterId, petId);
-        await SendResultAsync(stream, Opcode.PetActivateResponse, true, "Active pet selected.", ct);
+        await SendResultAsync(connection, Opcode.PetActivateResponse, true, "Active pet selected.", ct);
     }
 
-    private async Task RenameAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task RenameAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
     {
         if (payload.Length < 10)
         {
-            await SendResultAsync(stream, Opcode.PetRenameResponse, false, "Invalid rename request.", ct);
+            await SendResultAsync(connection, Opcode.PetRenameResponse, false, "Invalid rename request.", ct);
             return;
         }
 
@@ -108,14 +110,14 @@ public sealed class PetPacketHandler(
         var nameLength = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(8, 2));
         if (nameLength is 0 or > 48 || payload.Length != 10 + nameLength)
         {
-            await SendResultAsync(stream, Opcode.PetRenameResponse, false, "Invalid pet name.", ct);
+            await SendResultAsync(connection, Opcode.PetRenameResponse, false, "Invalid pet name.", ct);
             return;
         }
 
         var name = Encoding.UTF8.GetString(payload, 10, nameLength).Trim();
         if (string.IsNullOrWhiteSpace(name) || name.Length > 24 || name.Any(char.IsControl))
         {
-            await SendResultAsync(stream, Opcode.PetRenameResponse, false, "Invalid pet name.", ct);
+            await SendResultAsync(connection, Opcode.PetRenameResponse, false, "Invalid pet name.", ct);
             return;
         }
 
@@ -123,21 +125,21 @@ public sealed class PetPacketHandler(
         var pet = await db.CharacterPets.SingleOrDefaultAsync(x => x.Id == petId && x.CharacterId == characterId, ct);
         if (pet is null)
         {
-            await SendResultAsync(stream, Opcode.PetRenameResponse, false, "Pet not found.", ct);
+            await SendResultAsync(connection, Opcode.PetRenameResponse, false, "Pet not found.", ct);
             return;
         }
 
         pet.Name = name;
         pet.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
-        await SendResultAsync(stream, Opcode.PetRenameResponse, true, "Pet renamed.", ct);
+        await SendResultAsync(connection, Opcode.PetRenameResponse, true, "Pet renamed.", ct);
     }
 
-    private async Task ReleaseAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task ReleaseAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
     {
         if (!TryReadPetId(payload, out var petId))
         {
-            await SendResultAsync(stream, Opcode.PetReleaseResponse, false, "Invalid pet.", ct);
+            await SendResultAsync(connection, Opcode.PetReleaseResponse, false, "Invalid pet.", ct);
             return;
         }
 
@@ -145,14 +147,78 @@ public sealed class PetPacketHandler(
         var pet = await db.CharacterPets.SingleOrDefaultAsync(x => x.Id == petId && x.CharacterId == characterId, ct);
         if (pet is null)
         {
-            await SendResultAsync(stream, Opcode.PetReleaseResponse, false, "Pet not found.", ct);
+            await SendResultAsync(connection, Opcode.PetReleaseResponse, false, "Pet not found.", ct);
             return;
         }
 
         db.CharacterPets.Remove(pet);
         await db.SaveChangesAsync(ct);
         logger.LogInformation("Pet released CharacterId={CharacterId} PetId={PetId}", characterId, petId);
-        await SendResultAsync(stream, Opcode.PetReleaseResponse, true, "Pet released.", ct);
+        await SendResultAsync(connection, Opcode.PetReleaseResponse, true, "Pet released.", ct);
+    }
+
+    private async Task HealAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
+    {
+        if (!TryReadPetId(payload, out var petId))
+        {
+            await SendResultAsync(connection, Opcode.PetHealResponse, false, "Invalid pet.", ct);
+            return;
+        }
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var pet = await db.CharacterPets.SingleOrDefaultAsync(x => x.Id == petId && x.CharacterId == characterId, ct);
+        if (pet is null)
+        {
+            await SendResultAsync(connection, Opcode.PetHealResponse, false, "Pet not found.", ct);
+            return;
+        }
+
+        if (pet.Hp <= 0)
+        {
+            await SendResultAsync(connection, Opcode.PetHealResponse, false, "Pet is knocked out and must be revived.", ct);
+            return;
+        }
+
+        if (pet.Hp >= pet.MaxHp)
+        {
+            await SendResultAsync(connection, Opcode.PetHealResponse, false, "Pet is already at full HP.", ct);
+            return;
+        }
+
+        pet.Hp = pet.MaxHp;
+        pet.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Pet healed CharacterId={CharacterId} PetId={PetId}", characterId, petId);
+        await SendResultAsync(connection, Opcode.PetHealResponse, true, "Pet healed to full HP.", ct);
+    }
+
+    private async Task ReviveAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
+    {
+        if (!TryReadPetId(payload, out var petId))
+        {
+            await SendResultAsync(connection, Opcode.PetReviveResponse, false, "Invalid pet.", ct);
+            return;
+        }
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var pet = await db.CharacterPets.SingleOrDefaultAsync(x => x.Id == petId && x.CharacterId == characterId, ct);
+        if (pet is null)
+        {
+            await SendResultAsync(connection, Opcode.PetReviveResponse, false, "Pet not found.", ct);
+            return;
+        }
+
+        if (pet.Hp > 0)
+        {
+            await SendResultAsync(connection, Opcode.PetReviveResponse, false, "Pet is not knocked out.", ct);
+            return;
+        }
+
+        pet.Hp = Math.Max(1, pet.MaxHp / 2);
+        pet.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Pet revived CharacterId={CharacterId} PetId={PetId} Hp={Hp}", characterId, petId, pet.Hp);
+        await SendResultAsync(connection, Opcode.PetReviveResponse, true, "Pet revived at 50% HP.", ct);
     }
 
     private static bool TryReadPetId(byte[] payload, out long petId)
@@ -163,14 +229,14 @@ public sealed class PetPacketHandler(
         return petId > 0;
     }
 
-    private static Task SendResultAsync(NetworkStream stream, Opcode opcode, bool success, string message, CancellationToken ct)
+    private static Task SendResultAsync(ClientConnection connection, Opcode opcode, bool success, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 2 + messageBytes.Length];
         payload[0] = success ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(1, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(3));
-        return ConnectionSendGate.SendPacketAsync(stream, opcode, payload, ct);
+        return connection.SendAsync(opcode, payload, ct);
     }
 
     private static void WriteString(BinaryWriter writer, string value)

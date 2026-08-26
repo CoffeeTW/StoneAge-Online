@@ -5,7 +5,7 @@ using StoneAge.Network.Protocol;
 const string host = "127.0.0.1";
 const int port = 7021;
 
-Console.WriteLine("StoneAge Online TestClient v0.1-14");
+Console.WriteLine("StoneAge Online TestClient v0.1-15");
 Console.WriteLine($"Connecting to {host}:{port} ...");
 
 await using var client = new AsyncPacketClient();
@@ -37,7 +37,7 @@ if (login.Payload.Length < 1 || login.Payload[0] != 1)
 
 Console.WriteLine("Commands: chars | create <name> | select <id> | enter | move <x> <y> <dir>");
 Console.WriteLine("Battle: attack | defend | escape | capture | petskill <slot>");
-Console.WriteLine("Pets: pets | petactive <id> | petname <id> <name> | petrelease <id>");
+Console.WriteLine("Pets: pets | petactive <id> | petname <id> <name> | petrelease <id> | petheal <id> | petrevive <id>");
 Console.WriteLine("Pet skills: petskills <petId> | petlearn <petId> <skillId> <slot> | petforget <petId> <slot> | quit");
 Console.WriteLine("Broadcasts and BattleStart/BattleEnd are received automatically; 'recv' is no longer needed.");
 
@@ -135,6 +135,24 @@ while (true)
             Opcode.PetActivateRequest,
             BuildInt64Payload(activePetId),
             Opcode.PetActivateResponse));
+        continue;
+    }
+
+    if (input.StartsWith("petheal ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[8..], out var healPetId))
+    {
+        PrintPacket(await client.RequestAsync(
+            Opcode.PetHealRequest,
+            BuildInt64Payload(healPetId),
+            Opcode.PetHealResponse));
+        continue;
+    }
+
+    if (input.StartsWith("petrevive ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[10..], out var revivePetId))
+    {
+        PrintPacket(await client.RequestAsync(
+            Opcode.PetReviveRequest,
+            BuildInt64Payload(revivePetId),
+            Opcode.PetReviveResponse));
         continue;
     }
 
@@ -237,6 +255,8 @@ static void PrintPacket(PacketFrame packet)
         case Opcode.PetActivateResponse:
         case Opcode.PetRenameResponse:
         case Opcode.PetReleaseResponse:
+        case Opcode.PetHealResponse:
+        case Opcode.PetReviveResponse:
         case Opcode.PetSkillLearnResponse:
         case Opcode.PetSkillForgetResponse:
         case Opcode.BattlePetSkillSelectResponse:

@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Net.Sockets;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using StoneAge.Domain.Entities;
@@ -21,22 +20,23 @@ public sealed class InventoryShopPacketHandler(
 {
     private const short InventoryCapacity = 20;
 
-    public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken cancellationToken)
+    public Task HandleAsync(ClientConnection connection, PacketFrame packet, CancellationToken cancellationToken)
     {
+        var session = connection.Session;
         if (session.State != SessionState.InWorld || session.CharacterId is null)
             return Task.CompletedTask;
 
         return packet.Opcode switch
         {
-            Opcode.InventoryListRequest => SendInventoryAsync(session.CharacterId.Value, stream, cancellationToken),
-            Opcode.ShopListRequest => SendShopListAsync(session.CharacterId.Value, packet.Payload, stream, cancellationToken),
-            Opcode.ShopBuyRequest => BuyAsync(session.CharacterId.Value, packet.Payload, stream, cancellationToken),
-            Opcode.ShopSellRequest => SellAsync(session.CharacterId.Value, packet.Payload, stream, cancellationToken),
+            Opcode.InventoryListRequest => SendInventoryAsync(session.CharacterId.Value, connection, cancellationToken),
+            Opcode.ShopListRequest => SendShopListAsync(session.CharacterId.Value, packet.Payload, connection, cancellationToken),
+            Opcode.ShopBuyRequest => BuyAsync(session.CharacterId.Value, packet.Payload, connection, cancellationToken),
+            Opcode.ShopSellRequest => SellAsync(session.CharacterId.Value, packet.Payload, connection, cancellationToken),
             _ => Task.CompletedTask
         };
     }
 
-    private async Task SendInventoryAsync(long characterId, NetworkStream stream, CancellationToken ct)
+    private async Task SendInventoryAsync(long characterId, ClientConnection connection, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var character = await db.Characters.AsNoTracking().SingleAsync(x => x.Id == characterId, ct);
@@ -58,14 +58,14 @@ public sealed class InventoryShopPacketHandler(
             writer.Write(row.Slot);
             writer.Write(row.EquippedSlot ?? (byte)0);
         }
-        await ConnectionSendGate.SendPacketAsync(stream, Opcode.InventoryListResponse, ms.ToArray(), ct);
+        await connection.SendAsync(Opcode.InventoryListResponse, ms.ToArray(), ct);
     }
 
-    private async Task SendShopListAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task SendShopListAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
     {
         if (!TryReadNpc(payload, out var npcId) || !CanUseShop(characterId, npcId))
         {
-            await ConnectionSendGate.SendPacketAsync(stream, Opcode.ShopListResponse, new byte[] { 0, 0 }, ct);
+            await connection.SendAsync(Opcode.ShopListResponse, new byte[] { 0, 0 }, ct);
             return;
         }
 
@@ -81,14 +81,14 @@ public sealed class InventoryShopPacketHandler(
             writer.Write(item.MaxStack);
             WriteString(writer, item.Type);
         }
-        await ConnectionSendGate.SendPacketAsync(stream, Opcode.ShopListResponse, ms.ToArray(), ct);
+        await connection.SendAsync(Opcode.ShopListResponse, ms.ToArray(), ct);
     }
 
-    private async Task BuyAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task BuyAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
     {
         if (!TryReadTrade(payload, out var npcId, out var itemId, out var quantity) || !CanUseShop(characterId, npcId) || quantity <= 0 || !items.TryGet(itemId, out var item) || item is null)
         {
-            await SendTradeResultAsync(stream, Opcode.ShopBuyResponse, false, "Invalid purchase.", ct);
+            await SendTradeResultAsync(connection, Opcode.ShopBuyResponse, false, "Invalid purchase.", ct);
             return;
         }
 
@@ -96,7 +96,7 @@ public sealed class InventoryShopPacketHandler(
         try { total = checked(item.BuyPrice * quantity); }
         catch (OverflowException)
         {
-            await SendTradeResultAsync(stream, Opcode.ShopBuyResponse, false, "Invalid purchase quantity.", ct);
+            await SendTradeResultAsync(connection, Opcode.ShopBuyResponse, false, "Invalid purchase quantity.", ct);
             return;
         }
 
@@ -105,7 +105,7 @@ public sealed class InventoryShopPacketHandler(
         var character = await db.Characters.SingleAsync(x => x.Id == characterId, ct);
         if (character.Stone < total)
         {
-            await SendTradeResultAsync(stream, Opcode.ShopBuyResponse, false, "Not enough Stone.", ct);
+            await SendTradeResultAsync(connection, Opcode.ShopBuyResponse, false, "Not enough Stone.", ct);
             return;
         }
 
@@ -114,7 +114,7 @@ public sealed class InventoryShopPacketHandler(
         var current = row?.Quantity ?? 0;
         if (current + quantity > item.MaxStack)
         {
-            await SendTradeResultAsync(stream, Opcode.ShopBuyResponse, false, "Stack limit reached.", ct);
+            await SendTradeResultAsync(connection, Opcode.ShopBuyResponse, false, "Stack limit reached.", ct);
             return;
         }
 
@@ -124,7 +124,7 @@ public sealed class InventoryShopPacketHandler(
             var freeSlot = FindFreeSlot(rows);
             if (freeSlot is null)
             {
-                await SendTradeResultAsync(stream, Opcode.ShopBuyResponse, false, "Inventory is full.", ct);
+                await SendTradeResultAsync(connection, Opcode.ShopBuyResponse, false, "Inventory is full.", ct);
                 return;
             }
 
@@ -145,14 +145,14 @@ public sealed class InventoryShopPacketHandler(
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         logger.LogInformation("Shop buy CharacterId={CharacterId} NpcId={NpcId} ItemId={ItemId} Quantity={Quantity} Total={Total}", characterId, npcId, itemId, quantity, total);
-        await SendTradeResultAsync(stream, Opcode.ShopBuyResponse, true, "Purchase complete.", ct);
+        await SendTradeResultAsync(connection, Opcode.ShopBuyResponse, true, "Purchase complete.", ct);
     }
 
-    private async Task SellAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task SellAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
     {
         if (!TryReadTrade(payload, out var npcId, out var itemId, out var quantity) || !CanUseShop(characterId, npcId) || quantity <= 0 || !items.TryGet(itemId, out var item) || item is null)
         {
-            await SendTradeResultAsync(stream, Opcode.ShopSellResponse, false, "Invalid sale.", ct);
+            await SendTradeResultAsync(connection, Opcode.ShopSellResponse, false, "Invalid sale.", ct);
             return;
         }
 
@@ -162,13 +162,13 @@ public sealed class InventoryShopPacketHandler(
         var row = await db.CharacterItems.SingleOrDefaultAsync(x => x.CharacterId == characterId && x.ItemId == itemId, ct);
         if (row is null || row.Quantity < quantity)
         {
-            await SendTradeResultAsync(stream, Opcode.ShopSellResponse, false, "Not enough items.", ct);
+            await SendTradeResultAsync(connection, Opcode.ShopSellResponse, false, "Not enough items.", ct);
             return;
         }
 
         if (row.EquippedSlot is not null)
         {
-            await SendTradeResultAsync(stream, Opcode.ShopSellResponse, false, "Unequip the item before selling it.", ct);
+            await SendTradeResultAsync(connection, Opcode.ShopSellResponse, false, "Unequip the item before selling it.", ct);
             return;
         }
 
@@ -176,7 +176,7 @@ public sealed class InventoryShopPacketHandler(
         try { total = checked(item.SellPrice * quantity); }
         catch (OverflowException)
         {
-            await SendTradeResultAsync(stream, Opcode.ShopSellResponse, false, "Invalid sale quantity.", ct);
+            await SendTradeResultAsync(connection, Opcode.ShopSellResponse, false, "Invalid sale quantity.", ct);
             return;
         }
 
@@ -187,7 +187,7 @@ public sealed class InventoryShopPacketHandler(
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         logger.LogInformation("Shop sell CharacterId={CharacterId} NpcId={NpcId} ItemId={ItemId} Quantity={Quantity} Total={Total}", characterId, npcId, itemId, quantity, total);
-        await SendTradeResultAsync(stream, Opcode.ShopSellResponse, true, "Sale complete.", ct);
+        await SendTradeResultAsync(connection, Opcode.ShopSellResponse, true, "Sale complete.", ct);
     }
 
     private static short? FindFreeSlot(IReadOnlyCollection<CharacterItem> rows)
@@ -223,14 +223,14 @@ public sealed class InventoryShopPacketHandler(
         return true;
     }
 
-    private static Task SendTradeResultAsync(NetworkStream stream, Opcode opcode, bool success, string message, CancellationToken ct)
+    private static Task SendTradeResultAsync(ClientConnection connection, Opcode opcode, bool success, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 2 + messageBytes.Length];
         payload[0] = success ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(1, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(3));
-        return ConnectionSendGate.SendPacketAsync(stream, opcode, payload, ct);
+        return connection.SendAsync(opcode, payload, ct);
     }
 
     private static void WriteString(BinaryWriter writer, string value)

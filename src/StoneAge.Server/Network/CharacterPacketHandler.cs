@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Net.Sockets;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using StoneAge.Domain.Entities;
@@ -15,22 +14,24 @@ public sealed class CharacterPacketHandler(
 {
     private const int MaxCharactersPerAccount = 4;
 
-    public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken cancellationToken)
+    public Task HandleAsync(ClientConnection connection, PacketFrame packet, CancellationToken cancellationToken)
     {
+        var session = connection.Session;
         if (!session.IsAuthenticated || session.AccountId is null)
-            return SendErrorForAsync(packet.Opcode, stream, "Authentication required.", cancellationToken);
+            return SendErrorForAsync(packet.Opcode, connection, "Authentication required.", cancellationToken);
 
         return packet.Opcode switch
         {
-            Opcode.CharacterListRequest => SendCharacterListAsync(session, stream, cancellationToken),
-            Opcode.CharacterCreateRequest => CreateCharacterAsync(session, packet.Payload, stream, cancellationToken),
-            Opcode.CharacterSelectRequest => SelectCharacterAsync(session, packet.Payload, stream, cancellationToken),
+            Opcode.CharacterListRequest => SendCharacterListAsync(connection, cancellationToken),
+            Opcode.CharacterCreateRequest => CreateCharacterAsync(connection, packet.Payload, cancellationToken),
+            Opcode.CharacterSelectRequest => SelectCharacterAsync(connection, packet.Payload, cancellationToken),
             _ => Task.CompletedTask
         };
     }
 
-    private async Task SendCharacterListAsync(GameSession session, NetworkStream stream, CancellationToken cancellationToken)
+    private async Task SendCharacterListAsync(ClientConnection connection, CancellationToken cancellationToken)
     {
+        var session = connection.Session;
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var characters = await db.Characters
             .AsNoTracking()
@@ -52,21 +53,22 @@ public sealed class CharacterPacketHandler(
             writer.Write(character.Y);
         }
 
-        await ConnectionSendGate.SendPacketAsync(stream, Opcode.CharacterListResponse, ms.ToArray(), cancellationToken);
+        await connection.SendAsync(Opcode.CharacterListResponse, ms.ToArray(), cancellationToken);
     }
 
-    private async Task CreateCharacterAsync(GameSession session, byte[] payload, NetworkStream stream, CancellationToken cancellationToken)
+    private async Task CreateCharacterAsync(ClientConnection connection, byte[] payload, CancellationToken cancellationToken)
     {
+        var session = connection.Session;
         if (!TryReadName(payload, out var name))
         {
-            await SendCreateResponseAsync(stream, false, 0, "Invalid character name.", cancellationToken);
+            await SendCreateResponseAsync(connection, false, 0, "Invalid character name.", cancellationToken);
             return;
         }
 
         name = name.Trim();
         if (name.Length is < 2 or > 12)
         {
-            await SendCreateResponseAsync(stream, false, 0, "Character name must be 2-12 characters.", cancellationToken);
+            await SendCreateResponseAsync(connection, false, 0, "Character name must be 2-12 characters.", cancellationToken);
             return;
         }
 
@@ -75,13 +77,13 @@ public sealed class CharacterPacketHandler(
 
         if (await db.Characters.CountAsync(x => x.AccountId == accountId, cancellationToken) >= MaxCharactersPerAccount)
         {
-            await SendCreateResponseAsync(stream, false, 0, "Character limit reached.", cancellationToken);
+            await SendCreateResponseAsync(connection, false, 0, "Character limit reached.", cancellationToken);
             return;
         }
 
         if (await db.Characters.AnyAsync(x => x.Name == name, cancellationToken))
         {
-            await SendCreateResponseAsync(stream, false, 0, "Character name already exists.", cancellationToken);
+            await SendCreateResponseAsync(connection, false, 0, "Character name already exists.", cancellationToken);
             return;
         }
 
@@ -101,14 +103,15 @@ public sealed class CharacterPacketHandler(
         await db.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation("Character created CharacterId={CharacterId} AccountId={AccountId} Name={Name}", character.Id, accountId, name);
-        await SendCreateResponseAsync(stream, true, character.Id, "Character created.", cancellationToken);
+        await SendCreateResponseAsync(connection, true, character.Id, "Character created.", cancellationToken);
     }
 
-    private async Task SelectCharacterAsync(GameSession session, byte[] payload, NetworkStream stream, CancellationToken cancellationToken)
+    private async Task SelectCharacterAsync(ClientConnection connection, byte[] payload, CancellationToken cancellationToken)
     {
+        var session = connection.Session;
         if (payload.Length != 8)
         {
-            await SendSelectResponseAsync(stream, false, 0, "Invalid character selection.", cancellationToken);
+            await SendSelectResponseAsync(connection, false, 0, "Invalid character selection.", cancellationToken);
             return;
         }
 
@@ -120,18 +123,18 @@ public sealed class CharacterPacketHandler(
 
         if (character is null)
         {
-            await SendSelectResponseAsync(stream, false, 0, "Character not found.", cancellationToken);
+            await SendSelectResponseAsync(connection, false, 0, "Character not found.", cancellationToken);
             return;
         }
 
         if (!session.SelectCharacter(character.Id))
         {
-            await SendSelectResponseAsync(stream, false, 0, "Character cannot be selected in the current session state.", cancellationToken);
+            await SendSelectResponseAsync(connection, false, 0, "Character cannot be selected in the current session state.", cancellationToken);
             return;
         }
 
         logger.LogInformation("Character selected CharacterId={CharacterId} AccountId={AccountId} SessionId={SessionId}", character.Id, session.AccountId, session.SessionId);
-        await SendSelectResponseAsync(stream, true, character.Id, "Character selected.", cancellationToken);
+        await SendSelectResponseAsync(connection, true, character.Id, "Character selected.", cancellationToken);
     }
 
     private static bool TryReadName(byte[] payload, out string name)
@@ -148,13 +151,13 @@ public sealed class CharacterPacketHandler(
         return true;
     }
 
-    private static Task SendCreateResponseAsync(NetworkStream stream, bool success, long characterId, string message, CancellationToken cancellationToken)
-        => SendResultAsync(stream, Opcode.CharacterCreateResponse, success, characterId, message, cancellationToken);
+    private static Task SendCreateResponseAsync(ClientConnection connection, bool success, long characterId, string message, CancellationToken cancellationToken)
+        => SendResultAsync(connection, Opcode.CharacterCreateResponse, success, characterId, message, cancellationToken);
 
-    private static Task SendSelectResponseAsync(NetworkStream stream, bool success, long characterId, string message, CancellationToken cancellationToken)
-        => SendResultAsync(stream, Opcode.CharacterSelectResponse, success, characterId, message, cancellationToken);
+    private static Task SendSelectResponseAsync(ClientConnection connection, bool success, long characterId, string message, CancellationToken cancellationToken)
+        => SendResultAsync(connection, Opcode.CharacterSelectResponse, success, characterId, message, cancellationToken);
 
-    private static Task SendResultAsync(NetworkStream stream, Opcode opcode, bool success, long characterId, string message, CancellationToken cancellationToken)
+    private static Task SendResultAsync(ClientConnection connection, Opcode opcode, bool success, long characterId, string message, CancellationToken cancellationToken)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 8 + 2 + messageBytes.Length];
@@ -162,15 +165,15 @@ public sealed class CharacterPacketHandler(
         BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(1, 8), characterId);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(9, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(11));
-        return ConnectionSendGate.SendPacketAsync(stream, opcode, payload, cancellationToken);
+        return connection.SendAsync(opcode, payload, cancellationToken);
     }
 
-    private static Task SendErrorForAsync(Opcode request, NetworkStream stream, string message, CancellationToken cancellationToken)
+    private static Task SendErrorForAsync(Opcode request, ClientConnection connection, string message, CancellationToken cancellationToken)
         => request switch
         {
-            Opcode.CharacterCreateRequest => SendCreateResponseAsync(stream, false, 0, message, cancellationToken),
-            Opcode.CharacterSelectRequest => SendSelectResponseAsync(stream, false, 0, message, cancellationToken),
-            Opcode.CharacterListRequest => ConnectionSendGate.SendPacketAsync(stream, Opcode.CharacterListResponse, new byte[] { 0 }, cancellationToken),
+            Opcode.CharacterCreateRequest => SendCreateResponseAsync(connection, false, 0, message, cancellationToken),
+            Opcode.CharacterSelectRequest => SendSelectResponseAsync(connection, false, 0, message, cancellationToken),
+            Opcode.CharacterListRequest => connection.SendAsync(Opcode.CharacterListResponse, new byte[] { 0 }, cancellationToken),
             _ => Task.CompletedTask
         };
 
