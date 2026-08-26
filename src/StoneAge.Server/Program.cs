@@ -52,8 +52,7 @@ await using (var scope = host.Services.CreateAsyncScope())
 {
     var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<GameDbContext>>();
     await using var db = await factory.CreateDbContextAsync();
-    await db.Database.EnsureCreatedAsync();
-    await DatabaseSchemaUpgrade.ApplyAsync(db);
+    await MigrationBootstrap.ApplyAsync(db);
 
     if (builder.Environment.IsDevelopment())
     {
