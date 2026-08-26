@@ -42,7 +42,9 @@ public sealed class CompositePacketHandler(
             Opcode.PetListRequest or
             Opcode.PetActivateRequest or
             Opcode.PetRenameRequest or
-            Opcode.PetReleaseRequest => DispatchAsync(petHandler, connection, packet, cancellationToken),
+            Opcode.PetReleaseRequest or
+            Opcode.PetHealRequest or
+            Opcode.PetReviveRequest => DispatchAsync(petHandler, connection, packet, cancellationToken),
             Opcode.PetSkillListRequest or
             Opcode.PetSkillLearnRequest or
             Opcode.PetSkillForgetRequest => DispatchAsync(petSkillHandler, connection, packet, cancellationToken),
