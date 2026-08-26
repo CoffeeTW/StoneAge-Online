@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Net.Sockets;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using StoneAge.Game.Item;
@@ -14,27 +13,28 @@ public sealed class ItemEquipmentPacketHandler(
     ItemCatalog items,
     ILogger<ItemEquipmentPacketHandler> logger) : IClientPacketHandler
 {
-    public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken ct)
+    public Task HandleAsync(ClientConnection connection, PacketFrame packet, CancellationToken ct)
     {
+        var session = connection.Session;
         if (session.State != SessionState.InWorld || session.CharacterId is null)
             return Task.CompletedTask;
 
         var characterId = session.CharacterId.Value;
         return packet.Opcode switch
         {
-            Opcode.ItemUseRequest => UseAsync(characterId, packet.Payload, stream, ct),
-            Opcode.EquipmentListRequest => SendEquipmentAsync(characterId, stream, ct),
-            Opcode.ItemEquipRequest => EquipAsync(characterId, packet.Payload, stream, ct),
-            Opcode.ItemUnequipRequest => UnequipAsync(characterId, packet.Payload, stream, ct),
+            Opcode.ItemUseRequest => UseAsync(characterId, packet.Payload, connection, ct),
+            Opcode.EquipmentListRequest => SendEquipmentAsync(characterId, connection, ct),
+            Opcode.ItemEquipRequest => EquipAsync(characterId, packet.Payload, connection, ct),
+            Opcode.ItemUnequipRequest => UnequipAsync(characterId, packet.Payload, connection, ct),
             _ => Task.CompletedTask
         };
     }
 
-    private async Task UseAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task UseAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
     {
         if (!TryReadInventoryId(payload, out var inventoryId))
         {
-            await SendResultAsync(stream, Opcode.ItemUseResponse, false, "Invalid item.", ct);
+            await SendResultAsync(connection, Opcode.ItemUseResponse, false, "Invalid item.", ct);
             return;
         }
 
@@ -43,7 +43,7 @@ public sealed class ItemEquipmentPacketHandler(
         var row = await db.CharacterItems.SingleOrDefaultAsync(x => x.Id == inventoryId && x.CharacterId == characterId, ct);
         if (row is null || row.EquippedSlot is not null || !items.TryGet(row.ItemId, out var item) || item is null || !item.IsConsumable)
         {
-            await SendResultAsync(stream, Opcode.ItemUseResponse, false, "Item cannot be used.", ct);
+            await SendResultAsync(connection, Opcode.ItemUseResponse, false, "Item cannot be used.", ct);
             return;
         }
 
@@ -54,7 +54,7 @@ public sealed class ItemEquipmentPacketHandler(
         character.Mp = Math.Min(character.MaxMp, checked(character.Mp + item.MpRestore));
         if (character.Hp == oldHp && character.Mp == oldMp)
         {
-            await SendResultAsync(stream, Opcode.ItemUseResponse, false, "Item has no effect right now.", ct);
+            await SendResultAsync(connection, Opcode.ItemUseResponse, false, "Item has no effect right now.", ct);
             return;
         }
 
@@ -66,14 +66,14 @@ public sealed class ItemEquipmentPacketHandler(
         await tx.CommitAsync(ct);
 
         logger.LogInformation("Item used CharacterId={CharacterId} ItemId={ItemId} InventoryId={InventoryId}", characterId, row.ItemId, inventoryId);
-        await SendUseResultAsync(stream, true, character.Hp, character.Mp, "Item used.", ct);
+        await SendUseResultAsync(connection, true, character.Hp, character.Mp, "Item used.", ct);
     }
 
-    private async Task EquipAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task EquipAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
     {
         if (!TryReadInventoryId(payload, out var inventoryId))
         {
-            await SendResultAsync(stream, Opcode.ItemEquipResponse, false, "Invalid item.", ct);
+            await SendResultAsync(connection, Opcode.ItemEquipResponse, false, "Invalid item.", ct);
             return;
         }
 
@@ -82,7 +82,7 @@ public sealed class ItemEquipmentPacketHandler(
         var row = await db.CharacterItems.SingleOrDefaultAsync(x => x.Id == inventoryId && x.CharacterId == characterId, ct);
         if (row is null || row.Quantity != 1 || !items.TryGet(row.ItemId, out var item) || item is null || !item.TryGetEquipmentSlot(out var slot))
         {
-            await SendResultAsync(stream, Opcode.ItemEquipResponse, false, "Item cannot be equipped.", ct);
+            await SendResultAsync(connection, Opcode.ItemEquipResponse, false, "Item cannot be equipped.", ct);
             return;
         }
 
@@ -99,14 +99,14 @@ public sealed class ItemEquipmentPacketHandler(
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         logger.LogInformation("Item equipped CharacterId={CharacterId} ItemId={ItemId} Slot={Slot}", characterId, row.ItemId, slot);
-        await SendResultAsync(stream, Opcode.ItemEquipResponse, true, $"Equipped {slot}.", ct);
+        await SendResultAsync(connection, Opcode.ItemEquipResponse, true, $"Equipped {slot}.", ct);
     }
 
-    private async Task UnequipAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    private async Task UnequipAsync(long characterId, byte[] payload, ClientConnection connection, CancellationToken ct)
     {
         if (payload.Length != 1 || payload[0] is < 1 or > 3)
         {
-            await SendResultAsync(stream, Opcode.ItemUnequipResponse, false, "Invalid equipment slot.", ct);
+            await SendResultAsync(connection, Opcode.ItemUnequipResponse, false, "Invalid equipment slot.", ct);
             return;
         }
 
@@ -115,17 +115,17 @@ public sealed class ItemEquipmentPacketHandler(
         var row = await db.CharacterItems.SingleOrDefaultAsync(x => x.CharacterId == characterId && x.EquippedSlot == slot, ct);
         if (row is null)
         {
-            await SendResultAsync(stream, Opcode.ItemUnequipResponse, false, "Equipment slot is empty.", ct);
+            await SendResultAsync(connection, Opcode.ItemUnequipResponse, false, "Equipment slot is empty.", ct);
             return;
         }
 
         row.EquippedSlot = null;
         row.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
-        await SendResultAsync(stream, Opcode.ItemUnequipResponse, true, "Unequipped.", ct);
+        await SendResultAsync(connection, Opcode.ItemUnequipResponse, true, "Unequipped.", ct);
     }
 
-    private async Task SendEquipmentAsync(long characterId, NetworkStream stream, CancellationToken ct)
+    private async Task SendEquipmentAsync(long characterId, ClientConnection connection, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var character = await db.Characters.AsNoTracking().SingleAsync(x => x.Id == characterId, ct);
@@ -157,7 +157,7 @@ public sealed class ItemEquipmentPacketHandler(
         writer.Write(character.Strength + attackBonus);
         writer.Write(character.Vitality + defenseBonus);
         writer.Write(character.Agility + agilityBonus);
-        await ConnectionSendGate.SendPacketAsync(stream, Opcode.EquipmentListResponse, ms.ToArray(), ct);
+        await connection.SendAsync(Opcode.EquipmentListResponse, ms.ToArray(), ct);
     }
 
     private static bool TryReadInventoryId(byte[] payload, out long inventoryId)
@@ -168,7 +168,7 @@ public sealed class ItemEquipmentPacketHandler(
         return inventoryId > 0;
     }
 
-    private static Task SendUseResultAsync(NetworkStream stream, bool success, int hp, int mp, string message, CancellationToken ct)
+    private static Task SendUseResultAsync(ClientConnection connection, bool success, int hp, int mp, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 4 + 4 + 2 + messageBytes.Length];
@@ -177,16 +177,16 @@ public sealed class ItemEquipmentPacketHandler(
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(5, 4), mp);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(9, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(11));
-        return ConnectionSendGate.SendPacketAsync(stream, Opcode.ItemUseResponse, payload, ct);
+        return connection.SendAsync(Opcode.ItemUseResponse, payload, ct);
     }
 
-    private static Task SendResultAsync(NetworkStream stream, Opcode opcode, bool success, string message, CancellationToken ct)
+    private static Task SendResultAsync(ClientConnection connection, Opcode opcode, bool success, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[1 + 2 + messageBytes.Length];
         payload[0] = success ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(1, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(3));
-        return ConnectionSendGate.SendPacketAsync(stream, opcode, payload, ct);
+        return connection.SendAsync(opcode, payload, ct);
     }
 }
