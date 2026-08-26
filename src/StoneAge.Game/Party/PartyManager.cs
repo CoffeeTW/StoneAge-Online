@@ -162,6 +162,8 @@ public sealed class PartyManager
                 return PartyManageResult.TargetNotMember;
 
             party.LeaderId = targetId;
+            party.Members.Remove(targetId);
+            party.Members.Insert(0, targetId);
             snapshot = Snapshot(party);
             return PartyManageResult.Success;
         }
