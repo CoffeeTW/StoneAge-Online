@@ -16,15 +16,18 @@ public sealed class WorldPacketHandler(
     BattlePacketHandler battleHandler,
     ILogger<WorldPacketHandler> logger) : IClientPacketHandler
 {
-    public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken cancellationToken)
+    public Task HandleAsync(ClientConnection connection, PacketFrame packet, CancellationToken cancellationToken)
     {
         return packet.Opcode switch
         {
-            Opcode.EnterWorld => EnterWorldAsync(session, stream, cancellationToken),
-            Opcode.MoveRequest => MoveAsync(session, packet.Payload, stream, cancellationToken),
+            Opcode.EnterWorld => EnterWorldAsync(connection, cancellationToken),
+            Opcode.MoveRequest => MoveAsync(connection, packet.Payload, cancellationToken),
             _ => Task.CompletedTask
         };
     }
+
+    public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken cancellationToken)
+        => throw new NotSupportedException("WorldPacketHandler requires ClientConnection.");
 
     public async Task DisconnectAsync(GameSession session)
     {
@@ -56,11 +59,12 @@ public sealed class WorldPacketHandler(
         logger.LogInformation("Player left world CharacterId={CharacterId} SessionId={SessionId}", characterId, session.SessionId);
     }
 
-    private async Task EnterWorldAsync(GameSession session, NetworkStream stream, CancellationToken cancellationToken)
+    private async Task EnterWorldAsync(ClientConnection connection, CancellationToken cancellationToken)
     {
+        var session = connection.Session;
         if (session.State != SessionState.CharacterSelected || session.AccountId is null || session.CharacterId is null)
         {
-            await SendEnterWorldResponseAsync(stream, false, null, "Character selection required.", cancellationToken);
+            await SendEnterWorldResponseAsync(connection, false, null, "Character selection required.", cancellationToken);
             return;
         }
 
@@ -71,18 +75,18 @@ public sealed class WorldPacketHandler(
 
         if (character is null)
         {
-            await SendEnterWorldResponseAsync(stream, false, null, "Character not found.", cancellationToken);
+            await SendEnterWorldResponseAsync(connection, false, null, "Character not found.", cancellationToken);
             return;
         }
 
         var player = new PlayerRuntime(character.Id, character.Name, character.MapId, character.X, character.Y, character.Direction);
         var existingPlayers = world.GetPlayersInMap(player.MapId).ToArray();
 
-        if (!world.Enter(player) || !connections.Register(character.Id, stream))
+        if (!world.Enter(player) || !connections.Register(character.Id, connection))
         {
             world.Leave(character.Id);
             connections.Unregister(character.Id);
-            await SendEnterWorldResponseAsync(stream, false, null, "Character is already online or map is unavailable.", cancellationToken);
+            await SendEnterWorldResponseAsync(connection, false, null, "Character is already online or map is unavailable.", cancellationToken);
             return;
         }
 
@@ -90,12 +94,12 @@ public sealed class WorldPacketHandler(
         {
             connections.Unregister(character.Id);
             world.Leave(character.Id);
-            await SendEnterWorldResponseAsync(stream, false, null, "Invalid session state.", cancellationToken);
+            await SendEnterWorldResponseAsync(connection, false, null, "Invalid session state.", cancellationToken);
             return;
         }
 
         logger.LogInformation("Player entered world CharacterId={CharacterId} Map={MapId} X={X} Y={Y}", player.CharacterId, player.MapId, player.X, player.Y);
-        await SendEnterWorldResponseAsync(stream, true, player, "Entered world.", cancellationToken);
+        await SendEnterWorldResponseAsync(connection, true, player, "Entered world.", cancellationToken);
 
         foreach (var existing in existingPlayers)
             await connections.SendAsync(player.CharacterId, BuildPlayerEnterBroadcast(existing), cancellationToken);
@@ -105,24 +109,48 @@ public sealed class WorldPacketHandler(
             await connections.SendAsync(other.CharacterId, newPlayerPacket, cancellationToken);
     }
 
-    private async Task MoveAsync(GameSession session, byte[] payload, NetworkStream stream, CancellationToken cancellationToken)
+    private async Task MoveAsync(ClientConnection connection, byte[] payload, CancellationToken cancellationToken)
     {
-        if (session.State != SessionState.InWorld || session.CharacterId is null || payload.Length != 5)
+        var session = connection.Session;
+        if (session.State != SessionState.InWorld || session.CharacterId is null)
+        {
+            await SendMoveResponseAsync(connection, MoveResult.NotOnline, null, cancellationToken);
             return;
+        }
+
+        if (payload.Length != 5)
+        {
+            world.TryGetPlayer(session.CharacterId.Value, out var malformedPlayer);
+            await SendMoveResponseAsync(connection, MoveResult.InvalidTarget, malformedPlayer, cancellationToken);
+            return;
+        }
 
         var targetX = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(0, 2));
         var targetY = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(2, 2));
         var direction = payload[4];
+        var result = world.TryMove(session.CharacterId.Value, targetX, targetY, direction);
 
-        if (!world.TryMove(session.CharacterId.Value, targetX, targetY, direction) ||
-            !world.TryGetPlayer(session.CharacterId.Value, out var player) || player is null)
+        world.TryGetPlayer(session.CharacterId.Value, out var player);
+        await SendMoveResponseAsync(connection, result, player, cancellationToken);
+        if (result != MoveResult.Success || player is null)
             return;
 
         var packet = BuildMoveBroadcast(player);
         foreach (var other in world.GetPlayersInMap(player.MapId))
             await connections.SendAsync(other.CharacterId, packet, cancellationToken);
 
-        await battleHandler.TryStartEncounterAsync(session, stream, player.MapId, cancellationToken);
+        await battleHandler.TryStartEncounterAsync(session, connection.Stream, player.MapId, cancellationToken);
+    }
+
+    private static Task SendMoveResponseAsync(ClientConnection connection, MoveResult result, PlayerRuntime? player, CancellationToken cancellationToken)
+    {
+        var payload = new byte[10];
+        payload[0] = (byte)result;
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(1, 4), player?.MapId ?? 0);
+        BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(5, 2), player?.X ?? (short)0);
+        BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(7, 2), player?.Y ?? (short)0);
+        payload[9] = player?.Direction ?? (byte)0;
+        return connection.SendAsync(Opcode.MoveResponse, payload, cancellationToken);
     }
 
     private static byte[] BuildPlayerEnterBroadcast(PlayerRuntime player)
@@ -158,7 +186,7 @@ public sealed class WorldPacketHandler(
         return PacketCodec.Encode(Opcode.MoveBroadcast, payload);
     }
 
-    private static Task SendEnterWorldResponseAsync(NetworkStream stream, bool success, PlayerRuntime? player, string message, CancellationToken cancellationToken)
+    private static Task SendEnterWorldResponseAsync(ClientConnection connection, bool success, PlayerRuntime? player, string message, CancellationToken cancellationToken)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
@@ -171,6 +199,6 @@ public sealed class WorldPacketHandler(
         var messageBytes = Encoding.UTF8.GetBytes(message);
         writer.Write(checked((ushort)messageBytes.Length));
         writer.Write(messageBytes);
-        return ConnectionSendGate.SendPacketAsync(stream, Opcode.EnterWorld, ms.ToArray(), cancellationToken);
+        return connection.SendAsync(Opcode.EnterWorld, ms.ToArray(), cancellationToken);
     }
 }

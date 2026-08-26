@@ -17,43 +17,59 @@ public sealed class CompositePacketHandler(
     ILogger<CompositePacketHandler> logger) : IClientPacketHandler, IClientConnectionLifecycle
 {
     public Task HandleAsync(
-        GameSession session,
+        ClientConnection connection,
         PacketFrame packet,
-        NetworkStream stream,
         CancellationToken cancellationToken)
     {
         return packet.Opcode switch
         {
-            Opcode.LoginRequest => loginHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.LoginRequest => DispatchAsync(loginHandler, connection, packet, cancellationToken),
             Opcode.CharacterListRequest or
             Opcode.CharacterCreateRequest or
-            Opcode.CharacterSelectRequest => characterHandler.HandleAsync(session, packet, stream, cancellationToken),
-            Opcode.EnterWorld or Opcode.MoveRequest => worldHandler.HandleAsync(session, packet, stream, cancellationToken),
-            Opcode.NpcListRequest or Opcode.NpcInteractRequest => npcHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.CharacterSelectRequest => DispatchAsync(characterHandler, connection, packet, cancellationToken),
+            Opcode.EnterWorld or Opcode.MoveRequest => worldHandler.HandleAsync(connection, packet, cancellationToken),
+            Opcode.NpcListRequest or Opcode.NpcInteractRequest => DispatchAsync(npcHandler, connection, packet, cancellationToken),
             Opcode.InventoryListRequest or
             Opcode.ShopListRequest or
             Opcode.ShopBuyRequest or
-            Opcode.ShopSellRequest => inventoryShopHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.ShopSellRequest => DispatchAsync(inventoryShopHandler, connection, packet, cancellationToken),
             Opcode.ItemUseRequest or
             Opcode.EquipmentListRequest or
             Opcode.ItemEquipRequest or
-            Opcode.ItemUnequipRequest => itemEquipmentHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.ItemUnequipRequest => DispatchAsync(itemEquipmentHandler, connection, packet, cancellationToken),
             Opcode.BattleActionRequest or
-            Opcode.BattlePetSkillSelectRequest => battleHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.BattlePetSkillSelectRequest => DispatchAsync(battleHandler, connection, packet, cancellationToken),
             Opcode.PetListRequest or
             Opcode.PetActivateRequest or
             Opcode.PetRenameRequest or
-            Opcode.PetReleaseRequest => petHandler.HandleAsync(session, packet, stream, cancellationToken),
+            Opcode.PetReleaseRequest => DispatchAsync(petHandler, connection, packet, cancellationToken),
             Opcode.PetSkillListRequest or
             Opcode.PetSkillLearnRequest or
-            Opcode.PetSkillForgetRequest => petSkillHandler.HandleAsync(session, packet, stream, cancellationToken),
-            Opcode.Ping => ConnectionSendGate.SendPacketAsync(stream, Opcode.Pong, packet.Payload, cancellationToken),
-            _ => HandleUnknownAsync(session, packet)
+            Opcode.PetSkillForgetRequest => DispatchAsync(petSkillHandler, connection, packet, cancellationToken),
+            Opcode.Ping => connection.SendAsync(Opcode.Pong, packet.Payload, cancellationToken),
+            _ => HandleUnknownAsync(connection.Session, packet)
         };
     }
 
+    public Task HandleAsync(
+        GameSession session,
+        PacketFrame packet,
+        NetworkStream stream,
+        CancellationToken cancellationToken)
+        => throw new NotSupportedException("CompositePacketHandler requires ClientConnection.");
+
+    public Task OnDisconnectedAsync(ClientConnection connection, CancellationToken cancellationToken)
+        => worldHandler.DisconnectAsync(connection.Session);
+
     public Task OnDisconnectedAsync(GameSession session, CancellationToken cancellationToken)
         => worldHandler.DisconnectAsync(session);
+
+    private static Task DispatchAsync(
+        IClientPacketHandler handler,
+        ClientConnection connection,
+        PacketFrame packet,
+        CancellationToken cancellationToken)
+        => handler.HandleAsync(connection, packet, cancellationToken);
 
     private Task HandleUnknownAsync(GameSession session, PacketFrame packet)
     {

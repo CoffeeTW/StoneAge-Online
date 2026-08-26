@@ -21,6 +21,7 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
             while (!cancellationToken.IsCancellationRequested)
             {
                 var client = await _listener.AcceptTcpClientAsync(cancellationToken);
+                client.NoDelay = true;
                 _ = HandleClientAsync(client, log, cancellationToken);
             }
         }
@@ -35,22 +36,22 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
 
     private async Task HandleClientAsync(TcpClient client, Action<string> log, CancellationToken cancellationToken)
     {
-        var endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
-        var session = new GameSession();
+        await using var connection = new ClientConnection(client);
+        var session = connection.Session;
+        var endpoint = connection.RemoteEndpoint;
         log($"Client connected: {endpoint} Session={session.SessionId}");
 
         try
         {
-            await using var stream = client.GetStream();
-            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-13");
-            await ConnectionSendGate.SendAsync(stream, PacketCodec.Encode(Opcode.Hello, helloPayload), cancellationToken);
+            var helloPayload = Encoding.UTF8.GetBytes("StoneAge Online v0.1-14");
+            await connection.SendAsync(Opcode.Hello, helloPayload, cancellationToken);
 
             while (!cancellationToken.IsCancellationRequested)
             {
                 PacketFrame? packet;
                 try
                 {
-                    packet = await PacketReader.ReadAsync(stream, cancellationToken)
+                    packet = await PacketReader.ReadAsync(connection.Stream, cancellationToken)
                         .WaitAsync(IdleTimeout, cancellationToken);
                 }
                 catch (TimeoutException)
@@ -64,7 +65,7 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
 
                 session.Touch();
                 log($"RX Opcode={packet.Opcode} Payload={packet.Payload.Length} Session={session.SessionId}");
-                await packetHandler.HandleAsync(session, packet, stream, cancellationToken);
+                await packetHandler.HandleAsync(connection, packet, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -80,7 +81,7 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
             {
                 try
                 {
-                    await lifecycle.OnDisconnectedAsync(session, CancellationToken.None);
+                    await lifecycle.OnDisconnectedAsync(connection, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -88,7 +89,6 @@ public sealed class TcpGameServer(IClientPacketHandler packetHandler)
                 }
             }
 
-            client.Dispose();
             log($"Client disconnected: {endpoint} Session={session.SessionId}");
         }
     }

@@ -60,30 +60,30 @@ public sealed class WorldManager
         return true;
     }
 
-    public bool TryMove(long characterId, short targetX, short targetY, byte direction)
+    public MoveResult TryMove(long characterId, short targetX, short targetY, byte direction)
     {
         if (!_players.TryGetValue(characterId, out var player))
-            return false;
+            return MoveResult.NotOnline;
 
         if (direction > 7)
-            return false;
+            return MoveResult.InvalidDirection;
 
         if (DateTimeOffset.UtcNow - player.LastMoveAt < MinimumMoveInterval)
-            return false;
+            return MoveResult.TooFast;
 
         if (!_maps.TryGetValue(player.MapId, out var map) || !map.IsWalkable(targetX, targetY))
-            return false;
+            return MoveResult.Blocked;
 
         var dx = targetX - player.X;
         var dy = targetY - player.Y;
         if (Math.Abs(dx) > 1 || Math.Abs(dy) > 1 || (dx == 0 && dy == 0))
-            return false;
+            return MoveResult.InvalidTarget;
 
         if (!DirectionMatches(direction, dx, dy))
-            return false;
+            return MoveResult.DirectionMismatch;
 
         player.MoveTo(targetX, targetY, direction);
-        return true;
+        return MoveResult.Success;
     }
 
     public bool TryTeleport(long characterId, int targetMapId, short targetX, short targetY, byte direction, out int oldMapId)
