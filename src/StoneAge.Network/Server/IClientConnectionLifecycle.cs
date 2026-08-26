@@ -2,5 +2,8 @@ namespace StoneAge.Network.Server;
 
 public interface IClientConnectionLifecycle
 {
-    Task OnDisconnectedAsync(ClientConnection connection, CancellationToken cancellationToken);
+    Task OnDisconnectedAsync(GameSession session, CancellationToken cancellationToken);
+
+    Task OnDisconnectedAsync(ClientConnection connection, CancellationToken cancellationToken)
+        => OnDisconnectedAsync(connection.Session, cancellationToken);
 }
