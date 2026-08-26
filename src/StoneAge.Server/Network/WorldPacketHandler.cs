@@ -107,15 +107,27 @@ public sealed class WorldPacketHandler(
 
     private async Task MoveAsync(GameSession session, byte[] payload, NetworkStream stream, CancellationToken cancellationToken)
     {
-        if (session.State != SessionState.InWorld || session.CharacterId is null || payload.Length != 5)
+        if (session.State != SessionState.InWorld || session.CharacterId is null)
+        {
+            await SendMoveResponseAsync(stream, MoveResult.NotOnline, null, cancellationToken);
             return;
+        }
+
+        if (payload.Length != 5)
+        {
+            world.TryGetPlayer(session.CharacterId.Value, out var malformedPlayer);
+            await SendMoveResponseAsync(stream, MoveResult.InvalidTarget, malformedPlayer, cancellationToken);
+            return;
+        }
 
         var targetX = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(0, 2));
         var targetY = BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(2, 2));
         var direction = payload[4];
+        var result = world.TryMove(session.CharacterId.Value, targetX, targetY, direction);
 
-        if (!world.TryMove(session.CharacterId.Value, targetX, targetY, direction) ||
-            !world.TryGetPlayer(session.CharacterId.Value, out var player) || player is null)
+        world.TryGetPlayer(session.CharacterId.Value, out var player);
+        await SendMoveResponseAsync(stream, result, player, cancellationToken);
+        if (result != MoveResult.Success || player is null)
             return;
 
         var packet = BuildMoveBroadcast(player);
@@ -123,6 +135,17 @@ public sealed class WorldPacketHandler(
             await connections.SendAsync(other.CharacterId, packet, cancellationToken);
 
         await battleHandler.TryStartEncounterAsync(session, stream, player.MapId, cancellationToken);
+    }
+
+    private static Task SendMoveResponseAsync(NetworkStream stream, MoveResult result, PlayerRuntime? player, CancellationToken cancellationToken)
+    {
+        var payload = new byte[10];
+        payload[0] = (byte)result;
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(1, 4), player?.MapId ?? 0);
+        BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(5, 2), player?.X ?? (short)0);
+        BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(7, 2), player?.Y ?? (short)0);
+        payload[9] = player?.Direction ?? (byte)0;
+        return ConnectionSendGate.SendPacketAsync(stream, Opcode.MoveResponse, payload, cancellationToken);
     }
 
     private static byte[] BuildPlayerEnterBroadcast(PlayerRuntime player)
