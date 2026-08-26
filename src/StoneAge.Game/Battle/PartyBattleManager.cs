@@ -2,6 +2,35 @@ using System.Collections.Concurrent;
 
 namespace StoneAge.Game.Battle;
 
+public enum PartyBattleActorType : byte
+{
+    Monster = 0,
+    Player = 1,
+    Pet = 2
+}
+
+public sealed record PartyBattlePet(
+    long PetId,
+    string Name,
+    int Hp,
+    int MaxHp,
+    int Attack,
+    int Defense,
+    int Agility,
+    int Loyalty,
+    byte Earth,
+    byte Water,
+    byte Fire,
+    byte Wind,
+    int? SkillId,
+    int SkillPowerPercent,
+    string SkillElement,
+    string SkillEffect,
+    int SkillEffectPower)
+{
+    public int CurrentHp { get; set; } = Hp;
+}
+
 public sealed record PartyBattleParticipant(
     long CharacterId,
     string Name,
@@ -14,14 +43,20 @@ public sealed record PartyBattleParticipant(
     byte Earth,
     byte Water,
     byte Fire,
-    byte Wind)
+    byte Wind,
+    PartyBattlePet? Pet)
 {
     public int CurrentHp { get; set; } = Hp;
 }
 
-public sealed record PartyBattleAction(long CharacterId, byte Action);
-
-public sealed record PartyBattleHit(long ActorId, long TargetId, int Damage, int TargetHp);
+public sealed record PartyBattleHit(
+    PartyBattleActorType ActorType,
+    long ActorId,
+    PartyBattleActorType TargetType,
+    long TargetId,
+    int Amount,
+    int TargetHp,
+    bool IsHeal);
 
 public sealed record PartyBattleTurnResolution(
     int Turn,
@@ -74,21 +109,23 @@ public sealed class PartyBattleSession
     private PartyBattleTurnResolution ResolveTurn(IReadOnlyList<PartyBattleParticipant> living)
     {
         var hits = new List<PartyBattleHit>();
-        var initiative = living
-            .Select(x => (IsMonster: false, Character: x, Agility: x.Agility, Tie: Random.Shared.Next()))
-            .Append((IsMonster: true, Character: (PartyBattleParticipant?)null, Agility: Monster.Agility, Tie: Random.Shared.Next()))
-            .OrderByDescending(x => x.Agility)
-            .ThenByDescending(x => x.Tie)
-            .ToArray();
+        var initiative = new List<(PartyBattleActorType Type, PartyBattleParticipant? Player, PartyBattlePet? Pet, int Agility, int Tie)>();
+        foreach (var player in living)
+        {
+            initiative.Add((PartyBattleActorType.Player, player, null, player.Agility, Random.Shared.Next()));
+            if (player.Pet is { CurrentHp: > 0 } pet)
+                initiative.Add((PartyBattleActorType.Pet, player, pet, pet.Agility, Random.Shared.Next()));
+        }
+        initiative.Add((PartyBattleActorType.Monster, null, null, Monster.Agility, Random.Shared.Next()));
 
-        foreach (var actor in initiative)
+        foreach (var actor in initiative.OrderByDescending(x => x.Agility).ThenByDescending(x => x.Tie))
         {
             if (MonsterHp <= 0 || Participants.All(x => x.CurrentHp <= 0))
                 break;
 
-            if (!actor.IsMonster)
+            if (actor.Type == PartyBattleActorType.Player)
             {
-                var player = actor.Character!;
+                var player = actor.Player!;
                 if (player.CurrentHp <= 0 || _actions[player.CharacterId] != 1)
                     continue;
 
@@ -97,22 +134,70 @@ public sealed class PartyBattleSession
                     player.Earth, player.Water, player.Fire, player.Wind,
                     Monster.Earth, Monster.Water, Monster.Fire, Monster.Wind);
                 MonsterHp = Math.Max(0, MonsterHp - damage);
-                hits.Add(new PartyBattleHit(player.CharacterId, 0, damage, MonsterHp));
+                hits.Add(new PartyBattleHit(PartyBattleActorType.Player, player.CharacterId, PartyBattleActorType.Monster, 0, damage, MonsterHp, false));
                 continue;
             }
 
-            var targets = Participants.Where(x => x.CurrentHp > 0).ToArray();
-            if (targets.Length == 0)
+            if (actor.Type == PartyBattleActorType.Pet)
+            {
+                var owner = actor.Player!;
+                var pet = actor.Pet!;
+                if (owner.CurrentHp <= 0 || pet.CurrentHp <= 0 || Random.Shared.Next(100) >= Math.Clamp(50 + pet.Loyalty / 2, 50, 100))
+                    continue;
+
+                if (pet.SkillEffect.Equals("heal_self", StringComparison.OrdinalIgnoreCase))
+                {
+                    var amount = Math.Max(1, pet.MaxHp * Math.Clamp(pet.SkillEffectPower, 1, 100) / 100);
+                    var oldHp = pet.CurrentHp;
+                    pet.CurrentHp = Math.Min(pet.MaxHp, pet.CurrentHp + amount);
+                    hits.Add(new PartyBattleHit(PartyBattleActorType.Pet, pet.PetId, PartyBattleActorType.Pet, pet.PetId, pet.CurrentHp - oldHp, pet.CurrentHp, true));
+                    continue;
+                }
+
+                var earth = pet.Earth;
+                var water = pet.Water;
+                var fire = pet.Fire;
+                var wind = pet.Wind;
+                ApplySkillElement(pet.SkillElement, ref earth, ref water, ref fire, ref wind);
+                var baseDamage = CalculateDamage(
+                    pet.Attack, Monster.Defense,
+                    earth, water, fire, wind,
+                    Monster.Earth, Monster.Water, Monster.Fire, Monster.Wind);
+                var damage = Math.Max(1, baseDamage * Math.Clamp(pet.SkillPowerPercent, 50, 250) / 100);
+                MonsterHp = Math.Max(0, MonsterHp - damage);
+                hits.Add(new PartyBattleHit(PartyBattleActorType.Pet, pet.PetId, PartyBattleActorType.Monster, 0, damage, MonsterHp, false));
+                continue;
+            }
+
+            var playerTargets = Participants.Where(x => x.CurrentHp > 0).ToArray();
+            var petTargets = playerTargets.Where(x => x.Pet is { CurrentHp: > 0 }).Select(x => x.Pet!).ToArray();
+            var targetCount = playerTargets.Length + petTargets.Length;
+            if (targetCount == 0)
                 break;
-            var target = targets[Random.Shared.Next(targets.Length)];
-            var monsterDamage = CalculateDamage(
-                Monster.Attack, target.Defense,
-                Monster.Earth, Monster.Water, Monster.Fire, Monster.Wind,
-                target.Earth, target.Water, target.Fire, target.Wind);
-            if (_actions.TryGetValue(target.CharacterId, out var targetAction) && targetAction == 2)
-                monsterDamage = Math.Max(1, monsterDamage / 2);
-            target.CurrentHp = Math.Max(0, target.CurrentHp - monsterDamage);
-            hits.Add(new PartyBattleHit(0, target.CharacterId, monsterDamage, target.CurrentHp));
+
+            var targetIndex = Random.Shared.Next(targetCount);
+            if (targetIndex < playerTargets.Length)
+            {
+                var target = playerTargets[targetIndex];
+                var damage = CalculateDamage(
+                    Monster.Attack, target.Defense,
+                    Monster.Earth, Monster.Water, Monster.Fire, Monster.Wind,
+                    target.Earth, target.Water, target.Fire, target.Wind);
+                if (_actions.TryGetValue(target.CharacterId, out var targetAction) && targetAction == 2)
+                    damage = Math.Max(1, damage / 2);
+                target.CurrentHp = Math.Max(0, target.CurrentHp - damage);
+                hits.Add(new PartyBattleHit(PartyBattleActorType.Monster, 0, PartyBattleActorType.Player, target.CharacterId, damage, target.CurrentHp, false));
+            }
+            else
+            {
+                var target = petTargets[targetIndex - playerTargets.Length];
+                var damage = CalculateDamage(
+                    Monster.Attack, target.Defense,
+                    Monster.Earth, Monster.Water, Monster.Fire, Monster.Wind,
+                    target.Earth, target.Water, target.Fire, target.Wind);
+                target.CurrentHp = Math.Max(0, target.CurrentHp - damage);
+                hits.Add(new PartyBattleHit(PartyBattleActorType.Monster, 0, PartyBattleActorType.Pet, target.PetId, damage, target.CurrentHp, false));
+            }
         }
 
         return new PartyBattleTurnResolution(
@@ -121,6 +206,17 @@ public sealed class PartyBattleSession
             MonsterHp,
             MonsterHp <= 0,
             Participants.All(x => x.CurrentHp <= 0));
+    }
+
+    private static void ApplySkillElement(string element, ref byte earth, ref byte water, ref byte fire, ref byte wind)
+    {
+        switch (element.Trim().ToLowerInvariant())
+        {
+            case "earth": earth = 100; water = fire = wind = 0; break;
+            case "water": water = 100; earth = fire = wind = 0; break;
+            case "fire": fire = 100; earth = water = wind = 0; break;
+            case "wind": wind = 100; earth = water = fire = 0; break;
+        }
     }
 
     private static int CalculateDamage(
