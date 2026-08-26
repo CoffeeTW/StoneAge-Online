@@ -75,15 +75,46 @@ public sealed class BattlePacketHandler(
 
     public Task HandleAsync(GameSession session, PacketFrame packet, NetworkStream stream, CancellationToken ct)
     {
-        if (packet.Opcode != Opcode.BattleActionRequest || session.State != SessionState.InBattle || session.CharacterId is null)
+        if (session.State != SessionState.InBattle || session.CharacterId is null)
             return Task.CompletedTask;
-        return ResolveTurnAsync(session, packet.Payload, stream, ct);
+
+        return packet.Opcode switch
+        {
+            Opcode.BattleActionRequest => ResolveTurnAsync(session, packet.Payload, stream, ct),
+            Opcode.BattlePetSkillSelectRequest => SelectPetSkillAsync(session.CharacterId.Value, packet.Payload, stream, ct),
+            _ => Task.CompletedTask
+        };
     }
 
     public void Disconnect(GameSession session)
     {
         if (session.CharacterId is long id)
             battles.End(id);
+    }
+
+    private async Task SelectPetSkillAsync(long characterId, byte[] payload, NetworkStream stream, CancellationToken ct)
+    {
+        if (payload.Length != 1 || payload[0] > 3 ||
+            !battles.TryGet(characterId, out var battle) || battle is null ||
+            battle.Pet is null || battle.PetHp <= 0)
+        {
+            await SendPetSkillSelectResponseAsync(stream, false, 0, 0, "Pet skill cannot be selected.", ct);
+            return;
+        }
+
+        var slot = payload[0];
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var row = await db.CharacterPetSkills.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.CharacterPetId == battle.Pet.Id && x.Slot == slot, ct);
+        if (row is null || !petSkills.TryGet(row.SkillId, out var skill) || skill is null)
+        {
+            await SendPetSkillSelectResponseAsync(stream, false, slot, 0, "Pet skill slot is empty or invalid.", ct);
+            return;
+        }
+
+        battle.SelectedPetSkillId = row.SkillId;
+        logger.LogDebug("Battle pet skill selected CharacterId={CharacterId} PetId={PetId} Slot={Slot} SkillId={SkillId}", characterId, battle.Pet.Id, slot, row.SkillId);
+        await SendPetSkillSelectResponseAsync(stream, true, slot, row.SkillId, "Pet skill selected.", ct);
     }
 
     private async Task ResolveTurnAsync(GameSession session, byte[] payload, NetworkStream stream, CancellationToken ct)
@@ -116,11 +147,11 @@ public sealed class BattlePacketHandler(
         var playerDamage = 0;
         var petDamage = 0;
         var monsterDamage = 0;
-        var monsterTarget = (byte)0; // 0 none, 1 player, 2 pet
+        var monsterTarget = (byte)0;
 
         var initiative = new List<(Actor Actor, int Agility, int Tie)>
         {
-            (Actor.Player, battle.PlayerAgility, Random.Shared.Next()) ,
+            (Actor.Player, battle.PlayerAgility, Random.Shared.Next()),
             (Actor.Monster, battle.Monster.Agility, Random.Shared.Next())
         };
         if (battle.Pet is not null && battle.PetHp > 0)
@@ -151,7 +182,7 @@ public sealed class BattlePacketHandler(
                 var aWater = battle.Pet.Water;
                 var aFire = battle.Pet.Fire;
                 var aWind = battle.Pet.Wind;
-                if (battle.Pet.PrimarySkillId is int skillId && petSkills.TryGet(skillId, out var skill) && skill is not null)
+                if (battle.SelectedPetSkillId is int skillId && petSkills.TryGet(skillId, out var skill) && skill is not null)
                 {
                     powerPercent = Math.Clamp(skill.PowerPercent, 50, 250);
                     ApplySkillElement(skill.Element, ref aEarth, ref aWater, ref aFire, ref aWind);
@@ -404,7 +435,7 @@ public sealed class BattlePacketHandler(
             writer.Write(battle.PetHp);
             writer.Write(battle.Pet.MaxHp);
             writer.Write(battle.Pet.Loyalty);
-            writer.Write(battle.Pet.PrimarySkillId ?? 0);
+            writer.Write(battle.SelectedPetSkillId ?? 0);
         }
         return ConnectionSendGate.SendPacketAsync(stream, Opcode.BattleStart, ms.ToArray(), ct);
     }
@@ -439,6 +470,18 @@ public sealed class BattlePacketHandler(
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(29, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(31));
         return ConnectionSendGate.SendPacketAsync(stream, Opcode.BattleEnd, payload, ct);
+    }
+
+    private static Task SendPetSkillSelectResponseAsync(NetworkStream stream, bool success, byte slot, int skillId, string message, CancellationToken ct)
+    {
+        var messageBytes = Encoding.UTF8.GetBytes(message);
+        var payload = new byte[1 + 1 + 4 + 2 + messageBytes.Length];
+        payload[0] = success ? (byte)1 : (byte)0;
+        payload[1] = slot;
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(2, 4), skillId);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(6, 2), checked((ushort)messageBytes.Length));
+        messageBytes.CopyTo(payload.AsSpan(8));
+        return ConnectionSendGate.SendPacketAsync(stream, Opcode.BattlePetSkillSelectResponse, payload, ct);
     }
 
     private static void WriteString(BinaryWriter writer, string value)
