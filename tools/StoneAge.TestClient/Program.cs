@@ -27,7 +27,7 @@ PrintPacket(login);
 if (login.Opcode != Opcode.LoginResponse || login.Payload.Length < 1 || login.Payload[0] != 1) return;
 
 Console.WriteLine("Commands: chars | create <name> | select <id> | enter | move <x> <y> <dir> | recv");
-Console.WriteLine("Battle: attack | defend | escape | capture");
+Console.WriteLine("Battle: attack | defend | escape | capture | petskill <slot>");
 Console.WriteLine("Pets: pets | petactive <id> | petname <id> <name> | petrelease <id>");
 Console.WriteLine("Pet skills: petskills <petId> | petlearn <petId> <skillId> <slot> | petforget <petId> <slot> | quit");
 
@@ -102,6 +102,13 @@ while (true)
     if (battleAction != 0)
     {
         await stream.WriteAsync(PacketCodec.Encode(Opcode.BattleActionRequest, new[] { battleAction }));
+        PrintPacket(await ReadPacketAsync(stream));
+        continue;
+    }
+
+    if (input.StartsWith("petskill ", StringComparison.OrdinalIgnoreCase) && byte.TryParse(input[9..], out var battlePetSkillSlot))
+    {
+        await stream.WriteAsync(PacketCodec.Encode(Opcode.BattlePetSkillSelectRequest, new[] { battlePetSkillSlot }));
         PrintPacket(await ReadPacketAsync(stream));
         continue;
     }
@@ -198,6 +205,8 @@ static void PrintPacket(PacketFrame packet)
         PrintLegacyResult(packet.Payload);
     else if (packet.Opcode is Opcode.PetActivateResponse or Opcode.PetRenameResponse or Opcode.PetReleaseResponse or Opcode.PetSkillLearnResponse or Opcode.PetSkillForgetResponse)
         PrintSimpleResult(packet.Payload);
+    else if (packet.Opcode == Opcode.BattlePetSkillSelectResponse)
+        PrintBattlePetSkillResult(packet.Payload);
     else if (packet.Opcode == Opcode.PetListResponse)
         PrintPets(packet.Payload);
     else if (packet.Opcode == Opcode.PetSkillListResponse)
@@ -260,6 +269,17 @@ static void PrintPetSkills(byte[] payload)
     }
 }
 
+static void PrintBattlePetSkillResult(byte[] payload)
+{
+    if (payload.Length < 8) return;
+    var success = payload[0] == 1;
+    var slot = payload[1];
+    var skillId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(2, 4));
+    var len = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(6, 2));
+    var message = payload.Length >= 8 + len ? Encoding.UTF8.GetString(payload, 8, len) : string.Empty;
+    Console.WriteLine($"{(success ? "OK" : "FAIL")} PetSkill Slot={slot} SkillId={skillId} {message}");
+}
+
 static void PrintBattleStart(byte[] payload)
 {
     var offset = 0;
@@ -279,14 +299,15 @@ static void PrintBattleStart(byte[] payload)
         var petLevel = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
         var petHp = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
         var petMaxHp = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
-        var loyalty = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4));
-        Console.WriteLine($"PET: {petName}#{petId} Lv.{petLevel} HP={petHp}/{petMaxHp} Loyalty={loyalty}");
+        var loyalty = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
+        var selectedSkillId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4));
+        Console.WriteLine($"PET: {petName}#{petId} Lv.{petLevel} HP={petHp}/{petMaxHp} Loyalty={loyalty} SelectedSkill={selectedSkillId}");
     }
 }
 
 static void PrintBattleTurn(byte[] payload)
 {
-    Console.WriteLine($"Action={payload[0]} PlayerDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(1,4))} PetDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(5,4))} MonsterDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(9,4))} PlayerHP={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(13,4))} MonsterHP={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(17,4))}");
+    Console.WriteLine($"Action={payload[0]} PlayerDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(1,4))} PetDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(5,4))} MonsterDMG={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(9,4))} PlayerHP={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(13,4))} PetHP={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(17,4))} MonsterHP={BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(21,4))}");
 }
 
 static void PrintBattleEnd(byte[] payload)
