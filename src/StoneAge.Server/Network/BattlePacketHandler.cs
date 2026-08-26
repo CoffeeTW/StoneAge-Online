@@ -380,7 +380,7 @@ public sealed class BattlePacketHandler(
     private static long ExperienceForNextLevel(int level) => checked(level * 100L);
     private static long PetExperienceForNextLevel(int level) => checked(level * 80L);
 
-    private static async Task SendBattleStartAsync(NetworkStream stream, BattleSession battle, CancellationToken ct)
+    private static Task SendBattleStartAsync(NetworkStream stream, BattleSession battle, CancellationToken ct)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, true);
@@ -406,10 +406,10 @@ public sealed class BattlePacketHandler(
             writer.Write(battle.Pet.Loyalty);
             writer.Write(battle.Pet.PrimarySkillId ?? 0);
         }
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.BattleStart, ms.ToArray()), ct);
+        return ConnectionSendGate.SendPacketAsync(stream, Opcode.BattleStart, ms.ToArray(), ct);
     }
 
-    private static async Task SendTurnResultAsync(NetworkStream stream, BattleSession battle, byte action, int playerDamage, int petDamage, int monsterDamage, byte monsterTarget, bool victory, bool defeat, CancellationToken ct)
+    private static Task SendTurnResultAsync(NetworkStream stream, BattleSession battle, byte action, int playerDamage, int petDamage, int monsterDamage, byte monsterTarget, bool victory, bool defeat, CancellationToken ct)
     {
         var payload = new byte[28];
         payload[0] = action;
@@ -422,10 +422,10 @@ public sealed class BattlePacketHandler(
         payload[25] = monsterTarget;
         payload[26] = victory ? (byte)1 : (byte)0;
         payload[27] = defeat ? (byte)1 : (byte)0;
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.BattleTurnResult, payload), ct);
+        return ConnectionSendGate.SendPacketAsync(stream, Opcode.BattleTurnResult, payload, ct);
     }
 
-    private static async Task SendBattleEndAsync(NetworkStream stream, byte result, int exp, int levelsGained, int level, long remainingExp, int rewardId, int petLevelsGained, string message, CancellationToken ct)
+    private static Task SendBattleEndAsync(NetworkStream stream, byte result, int exp, int levelsGained, int level, long remainingExp, int rewardId, int petLevelsGained, string message, CancellationToken ct)
     {
         var messageBytes = Encoding.UTF8.GetBytes(message);
         var payload = new byte[31 + messageBytes.Length];
@@ -438,7 +438,7 @@ public sealed class BattlePacketHandler(
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(25, 4), petLevelsGained);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(29, 2), checked((ushort)messageBytes.Length));
         messageBytes.CopyTo(payload.AsSpan(31));
-        await stream.WriteAsync(PacketCodec.Encode(Opcode.BattleEnd, payload), ct);
+        return ConnectionSendGate.SendPacketAsync(stream, Opcode.BattleEnd, payload, ct);
     }
 
     private static void WriteString(BinaryWriter writer, string value)
