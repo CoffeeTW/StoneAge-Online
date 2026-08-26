@@ -19,7 +19,7 @@ public sealed class BattlePacketHandler(
     ILogger<BattlePacketHandler> logger) : IClientPacketHandler
 {
     private const int MaxPetsPerCharacter = 5;
-    private const int InventoryCapacity = 20;
+    private const short InventoryCapacity = 20;
 
     private enum Actor : byte { Player, Pet, Monster }
 
@@ -390,21 +390,15 @@ public sealed class BattlePacketHandler(
         if (!items.TryGet(itemId, out var item) || item is null)
             return 0;
 
-        var row = await db.CharacterItems.SingleOrDefaultAsync(x => x.CharacterId == characterId && x.ItemId == itemId, ct);
-        if (row is not null && row.Quantity < item.MaxStack)
-        {
-            row.Quantity++;
-            row.UpdatedAt = DateTimeOffset.UtcNow;
-            return itemId;
-        }
-
-        var usedSlots = await db.CharacterItems.Where(x => x.CharacterId == characterId).Select(x => x.Slot).ToListAsync(ct);
-        if (usedSlots.Count >= InventoryCapacity)
+        var rows = await db.CharacterItems
+            .Where(x => x.CharacterId == characterId)
+            .OrderBy(x => x.Slot)
+            .ToListAsync(ct);
+        if (!InventoryStackService.TryAdd(characterId, itemId, 1, item.MaxStack, InventoryCapacity, rows))
             return 0;
 
-        short slot = 0;
-        while (usedSlots.Contains(slot)) slot++;
-        db.CharacterItems.Add(new CharacterItem { CharacterId = characterId, ItemId = itemId, Quantity = 1, Slot = slot });
+        foreach (var row in rows.Where(x => x.Id == 0))
+            db.CharacterItems.Add(row);
         return itemId;
     }
 
