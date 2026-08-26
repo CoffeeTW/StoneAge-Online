@@ -13,6 +13,7 @@ public sealed class CompositePacketHandler(
     BattlePacketHandler battleHandler,
     PetPacketHandler petHandler,
     PetSkillPacketHandler petSkillHandler,
+    SocialPacketHandler socialHandler,
     ILogger<CompositePacketHandler> logger) : IClientPacketHandler, IClientConnectionLifecycle
 {
     public Task HandleAsync(
@@ -47,13 +48,22 @@ public sealed class CompositePacketHandler(
             Opcode.PetSkillListRequest or
             Opcode.PetSkillLearnRequest or
             Opcode.PetSkillForgetRequest => petSkillHandler.HandleAsync(connection, packet, cancellationToken),
+            Opcode.ChatSayRequest or
+            Opcode.PartyInviteRequest or
+            Opcode.PartyAnswerRequest or
+            Opcode.PartyLeaveRequest => socialHandler.HandleAsync(connection, packet, cancellationToken),
             Opcode.Ping => connection.SendAsync(Opcode.Pong, packet.Payload, cancellationToken),
             _ => HandleUnknownAsync(connection.Session, packet)
         };
     }
 
-    public Task OnDisconnectedAsync(ClientConnection connection, CancellationToken cancellationToken)
-        => worldHandler.DisconnectAsync(connection.Session);
+    public async Task OnDisconnectedAsync(ClientConnection connection, CancellationToken cancellationToken)
+    {
+        var characterId = connection.Session.CharacterId;
+        await worldHandler.DisconnectAsync(connection.Session);
+        if (characterId is long id)
+            await socialHandler.OnDisconnectedAsync(id, cancellationToken);
+    }
 
     private Task HandleUnknownAsync(GameSession session, PacketFrame packet)
     {
