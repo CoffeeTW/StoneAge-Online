@@ -75,5 +75,12 @@ public enum Opcode : ushort
     PartyAnswerResponse = 0x0B05,
     PartyStateBroadcast = 0x0B06,
     PartyLeaveRequest = 0x0B07,
-    PartyLeaveResponse = 0x0B08
+    PartyLeaveResponse = 0x0B08,
+    PartyChatRequest = 0x0B09,
+    PartyChatBroadcast = 0x0B0A,
+    PartyKickRequest = 0x0B0B,
+    PartyKickResponse = 0x0B0C,
+    PartyLeaderTransferRequest = 0x0B0D,
+    PartyLeaderTransferResponse = 0x0B0E,
+    PartyPresenceBroadcast = 0x0B0F
 }
