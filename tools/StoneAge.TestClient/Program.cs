@@ -6,7 +6,7 @@ using StoneAge.Network.Protocol;
 const string host = "127.0.0.1";
 const int port = 7021;
 
-Console.WriteLine("StoneAge Online TestClient v0.1-11");
+Console.WriteLine("StoneAge Online TestClient v0.1-13");
 Console.WriteLine($"Connecting to {host}:{port} ...");
 
 using var client = new TcpClient();
@@ -28,7 +28,8 @@ if (login.Opcode != Opcode.LoginResponse || login.Payload.Length < 1 || login.Pa
 
 Console.WriteLine("Commands: chars | create <name> | select <id> | enter | move <x> <y> <dir> | recv");
 Console.WriteLine("Battle: attack | defend | escape | capture");
-Console.WriteLine("Pets: pets | petactive <id> | petname <id> <name> | petrelease <id> | quit");
+Console.WriteLine("Pets: pets | petactive <id> | petname <id> <name> | petrelease <id>");
+Console.WriteLine("Pet skills: petskills <petId> | petlearn <petId> <skillId> <slot> | petforget <petId> <slot> | quit");
 
 while (true)
 {
@@ -142,6 +143,42 @@ while (true)
         continue;
     }
 
+    if (input.StartsWith("petskills ", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[10..], out var skillPetId))
+    {
+        await SendInt64Async(stream, Opcode.PetSkillListRequest, skillPetId);
+        PrintPacket(await ReadPacketAsync(stream));
+        continue;
+    }
+
+    if (input.StartsWith("petlearn ", StringComparison.OrdinalIgnoreCase))
+    {
+        var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 4 && long.TryParse(parts[1], out var learnPetId) && int.TryParse(parts[2], out var skillId) && byte.TryParse(parts[3], out var slot))
+        {
+            var payload = new byte[13];
+            BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(0, 8), learnPetId);
+            BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(8, 4), skillId);
+            payload[12] = slot;
+            await stream.WriteAsync(PacketCodec.Encode(Opcode.PetSkillLearnRequest, payload));
+            PrintPacket(await ReadPacketAsync(stream));
+        }
+        continue;
+    }
+
+    if (input.StartsWith("petforget ", StringComparison.OrdinalIgnoreCase))
+    {
+        var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 3 && long.TryParse(parts[1], out var forgetPetId) && byte.TryParse(parts[2], out var slot))
+        {
+            var payload = new byte[9];
+            BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(0, 8), forgetPetId);
+            payload[8] = slot;
+            await stream.WriteAsync(PacketCodec.Encode(Opcode.PetSkillForgetRequest, payload));
+            PrintPacket(await ReadPacketAsync(stream));
+        }
+        continue;
+    }
+
     Console.WriteLine("Unknown command.");
 }
 
@@ -159,10 +196,12 @@ static void PrintPacket(PacketFrame packet)
         Console.WriteLine(Encoding.UTF8.GetString(packet.Payload));
     else if (packet.Opcode is Opcode.LoginResponse or Opcode.CharacterCreateResponse or Opcode.CharacterSelectResponse)
         PrintLegacyResult(packet.Payload);
-    else if (packet.Opcode is Opcode.PetActivateResponse or Opcode.PetRenameResponse or Opcode.PetReleaseResponse)
+    else if (packet.Opcode is Opcode.PetActivateResponse or Opcode.PetRenameResponse or Opcode.PetReleaseResponse or Opcode.PetSkillLearnResponse or Opcode.PetSkillForgetResponse)
         PrintSimpleResult(packet.Payload);
     else if (packet.Opcode == Opcode.PetListResponse)
         PrintPets(packet.Payload);
+    else if (packet.Opcode == Opcode.PetSkillListResponse)
+        PrintPetSkills(packet.Payload);
     else if (packet.Opcode == Opcode.BattleStart)
         PrintBattleStart(packet.Payload);
     else if (packet.Opcode == Opcode.BattleTurnResult)
@@ -192,6 +231,32 @@ static void PrintPets(byte[] payload)
         var earth = payload[offset++]; var water = payload[offset++]; var fire = payload[offset++]; var wind = payload[offset++];
         var active = payload[offset++] == 1;
         Console.WriteLine($"  [{id}] {name} Monster={monsterId} Lv.{level} EXP={exp} HP={hp}/{maxHp} ATK={atk} DEF={def} AGI={agi} Loyalty={loyalty} E/W/F/W={earth}/{water}/{fire}/{wind} {(active ? "[ACTIVE]" : "")}");
+    }
+}
+
+static void PrintPetSkills(byte[] payload)
+{
+    if (payload.Length < 3)
+        return;
+
+    if (payload[0] != 1)
+    {
+        PrintSimpleResult(payload);
+        return;
+    }
+
+    var offset = 1;
+    var petId = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(offset, 8)); offset += 8;
+    var count = payload[offset++];
+    Console.WriteLine($"Pet #{petId} skills ({count}):");
+    for (var i = 0; i < count; i++)
+    {
+        var slot = payload[offset++];
+        var skillId = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
+        var name = ReadString(payload, ref offset);
+        var power = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset, 4)); offset += 4;
+        var element = ReadString(payload, ref offset);
+        Console.WriteLine($"  Slot {slot}: {name} (SkillId={skillId}, Power={power}%, Element={element})");
     }
 }
 
